@@ -83,7 +83,7 @@ class Dashboard(
 
             footer {
                 row {
-                    cell(gray("↑/↓ speed  ␣ pause/resume  q quit")) { columnSpan = 2 }
+                    cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  q quit")) { columnSpan = 2 }
                 }
             }
         }

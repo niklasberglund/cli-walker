@@ -9,6 +9,8 @@ import platform.posix.*
 enum class KeyEvent {
     ArrowUp,
     ArrowDown,
+    CtrlArrowUp,
+    CtrlArrowDown,
     Space,
     Quit,
 }
@@ -35,13 +37,30 @@ class KeyboardInput {
                     }
                     ' '.code -> emit(KeyEvent.Space)
                     0x1B -> {
-                        // Escape sequence: read [ and direction
+                        // CSI sequence: ESC [ params final
+                        // Plain arrow up/down:   ESC [ A / ESC [ B
+                        // Ctrl+arrow up/down:    ESC [ 1 ; 5 A / ESC [ 1 ; 5 B
                         val next = readByte() ?: continue
                         if (next != '['.code) continue
-                        val dir = readByte() ?: continue
-                        when (dir) {
-                            'A'.code -> emit(KeyEvent.ArrowUp)
-                            'B'.code -> emit(KeyEvent.ArrowDown)
+
+                        // Accumulate parameter bytes until we hit a final byte
+                        // (any letter in 0x40..0x7E per the CSI spec).
+                        val params = StringBuilder()
+                        var finalByte = -1
+                        for (i in 0 until 8) {
+                            val b = readByte() ?: break
+                            if (b in 0x40..0x7E) {
+                                finalByte = b
+                                break
+                            }
+                            params.append(b.toChar())
+                        }
+                        if (finalByte == -1) continue
+
+                        val ctrl = params.toString() == "1;5"
+                        when (finalByte) {
+                            'A'.code -> emit(if (ctrl) KeyEvent.CtrlArrowUp else KeyEvent.ArrowUp)
+                            'B'.code -> emit(if (ctrl) KeyEvent.CtrlArrowDown else KeyEvent.ArrowDown)
                         }
                     }
                 }

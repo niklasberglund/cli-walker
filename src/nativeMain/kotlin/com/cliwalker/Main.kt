@@ -26,6 +26,7 @@ class CliWalker : CliktCommand(
         .flag()
 
     private val speedStep = 0.5
+    private val fineSpeedStep = 0.1
 
     override fun run() = runBlocking {
         val terminal = Terminal()
@@ -53,6 +54,14 @@ class CliWalker : CliktCommand(
                         }
                         KeyEvent.ArrowDown -> {
                             currentSpeed = (currentSpeed - speedStep).coerceAtLeast(0.5)
+                            connection.setSpeed(currentSpeed)
+                        }
+                        KeyEvent.CtrlArrowUp -> {
+                            currentSpeed = (currentSpeed + fineSpeedStep).coerceAtMost(6.0)
+                            connection.setSpeed(currentSpeed)
+                        }
+                        KeyEvent.CtrlArrowDown -> {
+                            currentSpeed = (currentSpeed - fineSpeedStep).coerceAtLeast(0.5)
                             connection.setSpeed(currentSpeed)
                         }
                         KeyEvent.Space -> {
