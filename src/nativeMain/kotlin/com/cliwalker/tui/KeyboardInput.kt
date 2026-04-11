@@ -22,7 +22,11 @@ class KeyboardInput {
         enableRawMode()
         try {
             while (currentCoroutineContext().isActive) {
-                val byte = readByte() ?: continue
+                val byte = readByte()
+                if (byte == null) {
+                    delay(30)
+                    continue
+                }
 
                 when (byte) {
                     'q'.code, 'Q'.code -> {
@@ -55,9 +59,11 @@ class KeyboardInput {
         val raw = alloc<termios>()
         tcgetattr(STDIN_FILENO, raw.ptr)
         raw.c_lflag = raw.c_lflag and (ICANON or ECHO).toULong().inv()
-        // Non-blocking: VMIN=0, VTIME=1 (0.1s timeout)
+        // Fully non-blocking: VMIN=0, VTIME=0 — read() returns immediately.
+        // The coroutine yields via delay() between polls so the event loop
+        // can run other coroutines (BLE poll, notify collector, dashboard).
         raw.c_cc[VMIN] = 0u
-        raw.c_cc[VTIME] = 1u
+        raw.c_cc[VTIME] = 0u
         tcsetattr(STDIN_FILENO, TCSANOW, raw.ptr)
     }
 
