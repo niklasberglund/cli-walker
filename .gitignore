@@ -1,0 +1,7 @@
+build/
+.gradle/
+.kotlin/
+*.kexe
+*.hprof
+*.log
+.claude/settings.local.json

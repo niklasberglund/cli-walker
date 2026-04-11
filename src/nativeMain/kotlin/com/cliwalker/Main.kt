@@ -1,0 +1,100 @@
+package com.cliwalker
+
+import com.cliwalker.ble.WalkingPadConnection
+import com.cliwalker.tui.Dashboard
+import com.cliwalker.tui.KeyEvent
+import com.cliwalker.tui.KeyboardInput
+import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.main
+import com.github.ajalt.clikt.parameters.options.default
+import com.github.ajalt.clikt.parameters.options.flag
+import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.types.double
+import com.github.ajalt.mordant.rendering.TextColors.*
+import com.github.ajalt.mordant.rendering.TextStyles.*
+import com.github.ajalt.mordant.terminal.Terminal
+import kotlinx.coroutines.*
+
+class CliWalker : CliktCommand(
+    name = "cli-walker",
+) {
+    private val startSpeed by option("--speed", help = "Starting speed in km/h")
+        .double()
+        .default(2.5)
+
+    private val debug by option("--debug", help = "Enable verbose BLE packet logging")
+        .flag()
+
+    private val speedStep = 0.5
+
+    override fun run() = runBlocking {
+        val terminal = Terminal()
+        val connection = WalkingPadConnection(this, debug = debug)
+        val dashboard = Dashboard(terminal, connection.session, connection.connectionState)
+        val quit = CompletableDeferred<Unit>()
+
+        val dashboardJob = launch { dashboard.run(this) }
+
+        try {
+            connection.connect()
+
+            // Auto-start in manual mode at configured speed
+            connection.startBelt(startSpeed)
+            var currentSpeed = startSpeed
+
+            // Listen for keyboard input
+            val keyboard = KeyboardInput()
+            val inputJob = launch {
+                keyboard.events().collect { event ->
+                    when (event) {
+                        KeyEvent.ArrowUp -> {
+                            currentSpeed = (currentSpeed + speedStep).coerceAtMost(6.0)
+                            connection.setSpeed(currentSpeed)
+                        }
+                        KeyEvent.ArrowDown -> {
+                            currentSpeed = (currentSpeed - speedStep).coerceAtLeast(0.5)
+                            connection.setSpeed(currentSpeed)
+                        }
+                        KeyEvent.Space -> {
+                            if (connection.session.value.isActive) {
+                                connection.stopBelt()
+                            } else {
+                                connection.startBelt(currentSpeed)
+                            }
+                        }
+                        KeyEvent.Quit -> {
+                            connection.stopBelt()
+                            quit.complete(Unit)
+                        }
+                    }
+                }
+            }
+
+            quit.await()
+            inputJob.cancel()
+        } catch (e: Exception) {
+            if (e !is CancellationException) {
+                println(red("Connection error: ${e.message}"))
+            }
+        } finally {
+            dashboardJob.cancel()
+            connection.disconnect()
+            print("\u001B[?25h") // Restore cursor
+            printSessionSummary(terminal, connection)
+        }
+    }
+
+    private fun printSessionSummary(terminal: Terminal, connection: WalkingPadConnection) {
+        val session = connection.session.value
+        if (session.elapsedSeconds > 0) {
+            println()
+            println(green(bold("Session Summary")))
+            println("  Distance: ${session.formattedDistance}")
+            println("  Steps:    ${session.steps}")
+            println("  Time:     ${session.formattedTime}")
+            println("  Calories: ~${session.caloriesEstimate} kcal")
+        }
+    }
+}
+
+fun main(args: Array<String>) = CliWalker().main(args)
