@@ -2,6 +2,7 @@ package com.cliwalker.tui
 
 import com.cliwalker.ble.WalkingPadConnection.ConnectionState
 import com.cliwalker.model.WalkingSession
+import com.github.ajalt.mordant.animation.animation
 import com.github.ajalt.mordant.rendering.TextColors.*
 import com.github.ajalt.mordant.rendering.TextStyles.*
 import com.github.ajalt.mordant.table.Borders
@@ -9,85 +10,71 @@ import com.github.ajalt.mordant.table.table
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
-import platform.posix.fflush
-import platform.posix.stdout
 
 class Dashboard(
     private val terminal: Terminal,
     private val sessionFlow: StateFlow<WalkingSession>,
     private val connectionStateFlow: StateFlow<ConnectionState>,
 ) {
-    private var hasDrawn = false
-
     suspend fun run(scope: CoroutineScope) {
-        // Redraw every 500ms with latest values, regardless of whether data changed
-        while (scope.isActive) {
-            redraw(renderDashboard(sessionFlow.value, connectionStateFlow.value))
-            delay(500)
+        val animation = terminal.animation<Pair<WalkingSession, ConnectionState>> { (session, state) ->
+            renderDashboard(session, state)
+        }
+        try {
+            while (scope.isActive) {
+                animation.update(sessionFlow.value to connectionStateFlow.value)
+                delay(500)
+            }
+        } finally {
+            animation.clear()
         }
     }
 
-    private fun redraw(content: String) {
-        if (hasDrawn) {
-            // Move cursor to top-left and clear screen
-            print("\u001B[H\u001B[2J")
-        }
-        hasDrawn = true
-        println("CLI-Walker — Kingsmith WalkingPad Monitor")
-        println()
-        println(content)
-        @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
-        fflush(stdout)
-    }
-
-    private fun renderDashboard(session: WalkingSession, connState: ConnectionState): String {
-        val widget = table {
-            header {
-                row {
-                    cell(bold("CLI-Walker")) { columnSpan = 2 }
-                }
-            }
-
-            body {
-                cellBorders = Borders.TOP_BOTTOM
-
-                row {
-                    cell(gray("Status"))
-                    cell(formatConnectionState(connState))
-                }
-                row {
-                    cell(gray("Belt"))
-                    cell(formatBeltState(session))
-                }
-                row {
-                    cell(gray("Speed"))
-                    cell(formatSpeed(session))
-                }
-                row {
-                    cell(gray("Distance"))
-                    cell(cyan(session.formattedDistance))
-                }
-                row {
-                    cell(gray("Steps"))
-                    cell(cyan(session.steps.toString()))
-                }
-                row {
-                    cell(gray("Time"))
-                    cell(cyan(session.formattedTime))
-                }
-                row {
-                    cell(gray("Calories"))
-                    cell(cyan("~${session.caloriesEstimate} kcal"))
-                }
-            }
-
-            footer {
-                row {
-                    cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  q quit")) { columnSpan = 2 }
-                }
+    private fun renderDashboard(session: WalkingSession, connState: ConnectionState) = table {
+        header {
+            row {
+                cell(bold("CLI-Walker — Kingsmith WalkingPad Monitor")) { columnSpan = 2 }
             }
         }
-        return terminal.render(widget)
+
+        body {
+            cellBorders = Borders.TOP_BOTTOM
+
+            row {
+                cell(gray("Status"))
+                cell(formatConnectionState(connState))
+            }
+            row {
+                cell(gray("Belt"))
+                cell(formatBeltState(session))
+            }
+            row {
+                cell(gray("Speed"))
+                cell(formatSpeed(session))
+            }
+            row {
+                cell(gray("Distance"))
+                cell(cyan(session.formattedDistance))
+            }
+            row {
+                cell(gray("Steps"))
+                cell(cyan(session.steps.toString()))
+            }
+            row {
+                cell(gray("Time"))
+                cell(cyan(session.formattedTime))
+            }
+            row {
+                cell(gray("Calories"))
+                cell(cyan("~${session.caloriesEstimate} kcal"))
+            }
+        }
+
+        footer {
+            row {
+                cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  q quit")) { columnSpan = 2 }
+            }
+        }
     }
 
     private fun formatConnectionState(state: ConnectionState): String = when (state) {
