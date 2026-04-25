@@ -9,9 +9,12 @@ import platform.posix.*
 enum class KeyEvent {
     ArrowUp,
     ArrowDown,
+    ArrowLeft,
+    ArrowRight,
     CtrlArrowUp,
     CtrlArrowDown,
     Space,
+    Tab,
     Quit,
 }
 
@@ -36,6 +39,7 @@ class KeyboardInput {
                         return@flow
                     }
                     ' '.code -> emit(KeyEvent.Space)
+                    '\t'.code -> emit(KeyEvent.Tab)
                     0x1B -> {
                         // CSI sequence: ESC [ params final
                         // Plain arrow up/down:   ESC [ A / ESC [ B
@@ -61,6 +65,8 @@ class KeyboardInput {
                         when (finalByte) {
                             'A'.code -> emit(if (ctrl) KeyEvent.CtrlArrowUp else KeyEvent.ArrowUp)
                             'B'.code -> emit(if (ctrl) KeyEvent.CtrlArrowDown else KeyEvent.ArrowDown)
+                            'C'.code -> emit(KeyEvent.ArrowRight)
+                            'D'.code -> emit(KeyEvent.ArrowLeft)
                         }
                     }
                 }

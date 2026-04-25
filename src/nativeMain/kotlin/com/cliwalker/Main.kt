@@ -4,6 +4,8 @@ import com.cliwalker.ble.WalkingPadConnection
 import com.cliwalker.tui.Dashboard
 import com.cliwalker.tui.KeyEvent
 import com.cliwalker.tui.KeyboardInput
+import com.cliwalker.tui.Tab
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.parameters.options.default
@@ -31,64 +33,74 @@ class CliWalker : CliktCommand(
     override fun run() = runBlocking {
         val terminal = Terminal()
         val connection = WalkingPadConnection(this, debug = debug)
-        val dashboard = Dashboard(terminal, connection.session, connection.connectionState)
+        val activeTab = MutableStateFlow(Tab.Session)
+        val dashboard = Dashboard(terminal, connection.session, connection.connectionState, activeTab)
         val quit = CompletableDeferred<Unit>()
+        var connectionError: String? = null
+        var currentSpeed = startSpeed
 
         val dashboardJob = launch { dashboard.run(this) }
 
-        try {
-            connection.connect()
-
-            // Auto-start in manual mode at configured speed
-            connection.startBelt(startSpeed)
-            var currentSpeed = startSpeed
-
-            // Listen for keyboard input
-            val keyboard = KeyboardInput()
-            val inputJob = launch {
-                keyboard.events().collect { event ->
-                    when (event) {
-                        KeyEvent.ArrowUp -> {
-                            currentSpeed = (currentSpeed + speedStep).coerceAtMost(6.0)
-                            connection.setSpeed(currentSpeed)
-                        }
-                        KeyEvent.ArrowDown -> {
-                            currentSpeed = (currentSpeed - speedStep).coerceAtLeast(0.5)
-                            connection.setSpeed(currentSpeed)
-                        }
-                        KeyEvent.CtrlArrowUp -> {
-                            currentSpeed = (currentSpeed + fineSpeedStep).coerceAtMost(6.0)
-                            connection.setSpeed(currentSpeed)
-                        }
-                        KeyEvent.CtrlArrowDown -> {
-                            currentSpeed = (currentSpeed - fineSpeedStep).coerceAtLeast(0.5)
-                            connection.setSpeed(currentSpeed)
-                        }
-                        KeyEvent.Space -> {
-                            if (connection.session.value.isActive) {
-                                connection.stopBelt()
-                            } else {
-                                connection.startBelt(currentSpeed)
-                            }
-                        }
-                        KeyEvent.Quit -> {
+        val keyboard = KeyboardInput()
+        val inputJob = launch {
+            keyboard.events().collect { event ->
+                when (event) {
+                    KeyEvent.ArrowUp -> {
+                        currentSpeed = (currentSpeed + speedStep).coerceAtMost(6.0)
+                        connection.setSpeed(currentSpeed)
+                    }
+                    KeyEvent.ArrowDown -> {
+                        currentSpeed = (currentSpeed - speedStep).coerceAtLeast(0.5)
+                        connection.setSpeed(currentSpeed)
+                    }
+                    KeyEvent.CtrlArrowUp -> {
+                        currentSpeed = (currentSpeed + fineSpeedStep).coerceAtMost(6.0)
+                        connection.setSpeed(currentSpeed)
+                    }
+                    KeyEvent.CtrlArrowDown -> {
+                        currentSpeed = (currentSpeed - fineSpeedStep).coerceAtLeast(0.5)
+                        connection.setSpeed(currentSpeed)
+                    }
+                    KeyEvent.Space -> {
+                        if (connection.session.value.isActive) {
                             connection.stopBelt()
-                            quit.complete(Unit)
+                        } else {
+                            connection.startBelt(currentSpeed)
                         }
+                    }
+                    KeyEvent.Tab, KeyEvent.ArrowRight -> {
+                        activeTab.value = activeTab.value.next()
+                    }
+                    KeyEvent.ArrowLeft -> {
+                        activeTab.value = activeTab.value.previous()
+                    }
+                    KeyEvent.Quit -> {
+                        try { connection.stopBelt() } catch (_: Exception) {}
+                        quit.complete(Unit)
                     }
                 }
             }
+        }
 
-            quit.await()
-            inputJob.cancel()
-        } catch (e: Exception) {
-            if (e !is CancellationException) {
-                println(red("Connection error: ${e.message}"))
+        launch {
+            try {
+                connection.connect()
+                connection.startBelt(startSpeed)
+            } catch (e: Exception) {
+                if (e !is CancellationException) {
+                    connectionError = e.message
+                }
             }
+        }
+
+        try {
+            quit.await()
         } finally {
+            inputJob.cancel()
             dashboardJob.cancel()
             connection.disconnect()
             print("\u001B[?25h") // Restore cursor
+            connectionError?.let { println(red("Connection error: $it")) }
             printSessionSummary(terminal, connection)
         }
     }

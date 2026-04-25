@@ -11,18 +11,27 @@ import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
 
+enum class Tab(val label: String) {
+    Session("Session"),
+    Statistics("Statistics");
+
+    fun next(): Tab = entries[(ordinal + 1) % entries.size]
+    fun previous(): Tab = entries[(ordinal - 1 + entries.size) % entries.size]
+}
+
 class Dashboard(
     private val terminal: Terminal,
     private val sessionFlow: StateFlow<WalkingSession>,
     private val connectionStateFlow: StateFlow<ConnectionState>,
+    private val tabFlow: StateFlow<Tab>,
 ) {
     suspend fun run(scope: CoroutineScope) {
-        val animation = terminal.animation<Pair<WalkingSession, ConnectionState>> { (session, state) ->
-            renderDashboard(session, state)
+        val animation = terminal.animation<Triple<WalkingSession, ConnectionState, Tab>> { (session, state, tab) ->
+            renderDashboard(session, state, tab)
         }
         try {
             while (scope.isActive) {
-                animation.update(sessionFlow.value to connectionStateFlow.value)
+                animation.update(Triple(sessionFlow.value, connectionStateFlow.value, tabFlow.value))
                 delay(500)
             }
         } finally {
@@ -30,10 +39,23 @@ class Dashboard(
         }
     }
 
-    private fun renderDashboard(session: WalkingSession, connState: ConnectionState) = table {
+    private fun renderDashboard(session: WalkingSession, connState: ConnectionState, tab: Tab) = when (tab) {
+        Tab.Session -> renderSessionTab(session, connState)
+        Tab.Statistics -> renderStatisticsTab()
+    }
+
+    private fun renderTabBar(active: Tab): String {
+        val parts = Tab.entries.map { t ->
+            val label = " ${t.label} "
+            if (t == active) inverse(label) else gray(label)
+        }
+        return parts.joinToString(" ")
+    }
+
+    private fun renderSessionTab(session: WalkingSession, connState: ConnectionState) = table {
         header {
             row {
-                cell(bold("CLI-Walker — Kingsmith WalkingPad Monitor")) { columnSpan = 2 }
+                cell(renderTabBar(Tab.Session) + "\n" + bold("CLI-Walker — Kingsmith WalkingPad Monitor")) { columnSpan = 2 }
             }
         }
 
@@ -72,7 +94,26 @@ class Dashboard(
 
         footer {
             row {
-                cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  q quit")) { columnSpan = 2 }
+                cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  ⇥/←→ tabs  q quit")) { columnSpan = 2 }
+            }
+        }
+    }
+
+    private fun renderStatisticsTab() = table {
+        header {
+            row {
+                cell(renderTabBar(Tab.Statistics) + "\n" + bold("Statistics"))
+            }
+        }
+        body {
+            cellBorders = Borders.TOP_BOTTOM
+            row {
+                cell(gray("(coming soon)"))
+            }
+        }
+        footer {
+            row {
+                cell(gray("⇥/←→ tabs  q quit"))
             }
         }
     }
