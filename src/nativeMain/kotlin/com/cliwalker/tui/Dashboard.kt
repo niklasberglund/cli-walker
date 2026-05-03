@@ -11,6 +11,7 @@ import com.github.ajalt.mordant.table.table
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -145,6 +146,41 @@ class Dashboard(
                 row {
                     cell(gray("Calories"))
                     cell(cyan("~$totalCal kcal")) { columnSpan = cols - 1 }
+                }
+
+                val now = Clock.System.now().toLocalDateTime(zone)
+                val thisMonth = history.filter {
+                    val ldt = it.startedAt.toLocalDateTime(zone)
+                    ldt.year == now.year && ldt.monthNumber == now.monthNumber
+                }
+                row { cell(bold(underline("This Month (${MONTHS[now.monthNumber - 1]} ${now.year})"))) { columnSpan = cols } }
+                if (thisMonth.isEmpty()) {
+                    row { cell(gray("No sessions this month yet")) { columnSpan = cols } }
+                } else {
+                    val mDist = thisMonth.sumOf { it.distanceKm }
+                    val mSteps = thisMonth.sumOf { it.steps }
+                    val mCal = thisMonth.sumOf { it.calories }
+                    val mSecs = thisMonth.sumOf { it.durationSeconds }
+                    row {
+                        cell(gray("Sessions"))
+                        cell(cyan(thisMonth.size.toString())) { columnSpan = cols - 1 }
+                    }
+                    row {
+                        cell(gray("Distance"))
+                        cell(cyan("${roundTo2(mDist)} km")) { columnSpan = cols - 1 }
+                    }
+                    row {
+                        cell(gray("Steps"))
+                        cell(cyan(mSteps.toString())) { columnSpan = cols - 1 }
+                    }
+                    row {
+                        cell(gray("Time"))
+                        cell(cyan(formatDuration(mSecs))) { columnSpan = cols - 1 }
+                    }
+                    row {
+                        cell(gray("Calories"))
+                        cell(cyan("~$mCal kcal")) { columnSpan = cols - 1 }
+                    }
                 }
 
                 val longestDist = history.maxBy { it.distanceKm }
