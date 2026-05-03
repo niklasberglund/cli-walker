@@ -1,6 +1,8 @@
 package com.cliwalker
 
 import com.cliwalker.ble.WalkingPadConnection
+import com.cliwalker.model.SessionRecord
+import com.cliwalker.storage.SessionStore
 import com.cliwalker.tui.Dashboard
 import com.cliwalker.tui.KeyEvent
 import com.cliwalker.tui.KeyboardInput
@@ -16,6 +18,8 @@ import com.github.ajalt.mordant.rendering.TextColors.*
 import com.github.ajalt.mordant.rendering.TextStyles.*
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 
 class CliWalker : CliktCommand(
     name = "cli-walker",
@@ -34,12 +38,25 @@ class CliWalker : CliktCommand(
         val terminal = Terminal()
         val connection = WalkingPadConnection(this, debug = debug)
         val activeTab = MutableStateFlow(Tab.Session)
-        val dashboard = Dashboard(terminal, connection.session, connection.connectionState, activeTab)
+        val sessionStore = SessionStore()
+        val history = sessionStore.load()
+        val dashboard = Dashboard(terminal, connection.session, connection.connectionState, activeTab, history)
         val quit = CompletableDeferred<Unit>()
         var connectionError: String? = null
         var currentSpeed = startSpeed
+        var sessionStartedAt: Instant? = null
+        var maxSpeed = 0.0
 
         val dashboardJob = launch { dashboard.run(this) }
+
+        val trackerJob = launch {
+            connection.session.collect { s ->
+                if (s.isActive && sessionStartedAt == null) {
+                    sessionStartedAt = Clock.System.now()
+                }
+                if (s.speed > maxSpeed) maxSpeed = s.speed
+            }
+        }
 
         val keyboard = KeyboardInput()
         val inputJob = launch {
@@ -98,10 +115,38 @@ class CliWalker : CliktCommand(
         } finally {
             inputJob.cancel()
             dashboardJob.cancel()
+            trackerJob.cancel()
             connection.disconnect()
             print("\u001B[?25h") // Restore cursor
             connectionError?.let { println(red("Connection error: $it")) }
+            persistSession(sessionStore, connection, sessionStartedAt, maxSpeed)
             printSessionSummary(terminal, connection)
+        }
+    }
+
+    private fun persistSession(
+        store: SessionStore,
+        connection: WalkingPadConnection,
+        startedAt: Instant?,
+        maxSpeed: Double,
+    ) {
+        val s = connection.session.value
+        if (startedAt == null || s.elapsedSeconds <= 0 || s.distanceKm <= 0.0) return
+        val avgSpeed = s.distanceKm / (s.elapsedSeconds / 3600.0)
+        val record = SessionRecord(
+            startedAt = startedAt,
+            endedAt = Clock.System.now(),
+            durationSeconds = s.elapsedSeconds,
+            distanceKm = s.distanceKm,
+            steps = s.steps,
+            calories = s.caloriesEstimate,
+            avgSpeedKmh = avgSpeed,
+            maxSpeedKmh = maxSpeed,
+        )
+        try {
+            store.append(record)
+        } catch (_: Throwable) {
+            // best-effort persistence; don't fail on write error
         }
     }
 

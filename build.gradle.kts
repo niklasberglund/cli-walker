@@ -1,5 +1,6 @@
 plugins {
     kotlin("multiplatform") version "2.2.10"
+    kotlin("plugin.serialization") version "2.2.10"
 }
 
 repositories {
@@ -49,6 +50,7 @@ kotlin {
             implementation("com.github.ajalt.clikt:clikt:5.0.3")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.2")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.cliwalker.tui
 
 import com.cliwalker.ble.WalkingPadConnection.ConnectionState
+import com.cliwalker.model.SessionRecord
 import com.cliwalker.model.WalkingSession
 import com.github.ajalt.mordant.animation.animation
 import com.github.ajalt.mordant.rendering.TextColors.*
@@ -10,6 +11,9 @@ import com.github.ajalt.mordant.table.table
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 enum class Tab(val label: String) {
     Session("Session"),
@@ -24,6 +28,7 @@ class Dashboard(
     private val sessionFlow: StateFlow<WalkingSession>,
     private val connectionStateFlow: StateFlow<ConnectionState>,
     private val tabFlow: StateFlow<Tab>,
+    private val history: List<SessionRecord>,
 ) {
     suspend fun run(scope: CoroutineScope) {
         val animation = terminal.animation<Triple<WalkingSession, ConnectionState, Tab>> { (session, state, tab) ->
@@ -100,20 +105,99 @@ class Dashboard(
     }
 
     private fun renderStatisticsTab() = table {
+        val zone = TimeZone.currentSystemDefault()
+        val cols = 5
+
         header {
             row {
-                cell(renderTabBar(Tab.Statistics) + "\n" + bold("Statistics"))
+                cell(renderTabBar(Tab.Statistics) + "\n" + bold("Statistics")) { columnSpan = cols }
             }
         }
+
         body {
             cellBorders = Borders.TOP_BOTTOM
-            row {
-                cell(gray("(coming soon)"))
+
+            if (history.isEmpty()) {
+                row { cell(gray("No sessions recorded yet — go for a walk!")) { columnSpan = cols } }
+            } else {
+                val totalDist = history.sumOf { it.distanceKm }
+                val totalSteps = history.sumOf { it.steps }
+                val totalCal = history.sumOf { it.calories }
+                val totalSecs = history.sumOf { it.durationSeconds }
+
+                row { cell(bold(underline("Totals"))) { columnSpan = cols } }
+                row {
+                    cell(gray("Sessions"))
+                    cell(cyan(history.size.toString())) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Distance"))
+                    cell(cyan("${roundTo2(totalDist)} km")) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Steps"))
+                    cell(cyan(totalSteps.toString())) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Time"))
+                    cell(cyan(formatDuration(totalSecs))) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Calories"))
+                    cell(cyan("~$totalCal kcal")) { columnSpan = cols - 1 }
+                }
+
+                val longestDist = history.maxBy { it.distanceKm }
+                val longestTime = history.maxBy { it.durationSeconds }
+                val fastestAvg = history.maxBy { it.avgSpeedKmh }
+                val topSpeed = history.maxBy { it.maxSpeedKmh }
+                val mostSteps = history.maxBy { it.steps }
+
+                row { cell(bold(underline("Personal Bests"))) { columnSpan = cols } }
+                row {
+                    cell(gray("Longest distance"))
+                    cell(cyan("${roundTo2(longestDist.distanceKm)} km") + gray("  ${formatDate(longestDist.startedAt, zone)}")) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Longest duration"))
+                    cell(cyan(formatDuration(longestTime.durationSeconds)) + gray("  ${formatDate(longestTime.startedAt, zone)}")) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Best avg speed"))
+                    cell(cyan("${roundTo1(fastestAvg.avgSpeedKmh)} km/h") + gray("  ${formatDate(fastestAvg.startedAt, zone)}")) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Top speed"))
+                    cell(cyan("${roundTo1(topSpeed.maxSpeedKmh)} km/h") + gray("  ${formatDate(topSpeed.startedAt, zone)}")) { columnSpan = cols - 1 }
+                }
+                row {
+                    cell(gray("Most steps"))
+                    cell(cyan(mostSteps.steps.toString()) + gray("  ${formatDate(mostSteps.startedAt, zone)}")) { columnSpan = cols - 1 }
+                }
+
+                row { cell(bold(underline("Recent Sessions"))) { columnSpan = cols } }
+                row {
+                    cell(gray("Date"))
+                    cell(gray("Duration"))
+                    cell(gray("Distance"))
+                    cell(gray("Steps"))
+                    cell(gray("Avg km/h"))
+                }
+                history.takeLast(10).reversed().forEach { r ->
+                    row {
+                        cell(formatDate(r.startedAt, zone))
+                        cell(formatDuration(r.durationSeconds))
+                        cell("${roundTo2(r.distanceKm)} km")
+                        cell(r.steps.toString())
+                        cell(roundTo1(r.avgSpeedKmh))
+                    }
+                }
             }
         }
+
         footer {
             row {
-                cell(gray("⇥/←→ tabs  q quit"))
+                cell(gray("⇥/←→ tabs  q quit")) { columnSpan = cols }
             }
         }
     }
@@ -148,4 +232,34 @@ class Dashboard(
         }
         return "$filledStr${gray("░".repeat(empty))}"
     }
+}
+
+private fun roundTo1(d: Double): String {
+    val i = (d * 10).toInt()
+    return "${i / 10}.${i % 10}"
+}
+
+private fun roundTo2(d: Double): String {
+    val i = (d * 100).toInt()
+    val frac = i % 100
+    val fracStr = if (frac < 10) "0$frac" else "$frac"
+    return "${i / 100}.$fracStr"
+}
+
+private fun formatDuration(seconds: Int): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    fun pad(v: Int) = if (v < 10) "0$v" else "$v"
+    return if (h > 0) "$h:${pad(m)}:${pad(s)}" else "${pad(m)}:${pad(s)}"
+}
+
+private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+private fun formatDate(instant: Instant, zone: TimeZone): String {
+    val ldt = instant.toLocalDateTime(zone)
+    val day = ldt.dayOfMonth.toString().padStart(2, '0')
+    val hour = ldt.hour.toString().padStart(2, '0')
+    val min = ldt.minute.toString().padStart(2, '0')
+    return "${MONTHS[ldt.monthNumber - 1]} $day $hour:$min"
 }
