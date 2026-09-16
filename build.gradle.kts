@@ -38,5 +38,8 @@ kotlin {
             implementation("io.ktor:ktor-client-core:3.1.3")
             implementation("io.ktor:ktor-client-darwin:3.1.3")
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }

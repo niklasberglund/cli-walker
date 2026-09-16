@@ -35,22 +35,24 @@ data class WalkingSession(
 ) {
     val isActive: Boolean get() = state == BeltState.Running || state == BeltState.Starting || state == BeltState.Accelerating
 
-    val formattedTime: String
-        get() {
-            val h = elapsedSeconds / 3600
-            val m = (elapsedSeconds % 3600) / 60
-            val s = elapsedSeconds % 60
-            return if (h > 0) "${h}:${m.padTwo()}:${s.padTwo()}" else "${m.padTwo()}:${s.padTwo()}"
-        }
+    val formattedTime: String get() = formatDuration(elapsedSeconds)
 
     val formattedSpeed: String get() = "${roundTo1(speed)} km/h"
     val formattedDistance: String get() = "${roundTo2(distanceKm)} km"
 
-    val caloriesEstimate: Int
-        get() {
-            val hours = elapsedSeconds / 3600.0
-            return (3.5 * 70.0 * hours * 1.05 / 60.0 * 60.0).toInt()
-        }
+    val caloriesEstimate: Int get() = caloriesFor(elapsedSeconds)
+}
+
+fun formatDuration(seconds: Int): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return if (h > 0) "${h}:${m.padTwo()}:${s.padTwo()}" else "${m.padTwo()}:${s.padTwo()}"
+}
+
+fun caloriesFor(seconds: Int): Int {
+    val hours = seconds / 3600.0
+    return (3.5 * 70.0 * hours * 1.05 / 60.0 * 60.0).toInt()
 }
 
 private fun Int.padTwo(): String = if (this < 10) "0$this" else "$this"

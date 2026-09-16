@@ -2,7 +2,8 @@ package com.cliwalker
 
 import com.cliwalker.ble.WalkingPadConnection
 import com.cliwalker.model.SessionRecord
-import com.cliwalker.model.WalkingSession
+import com.cliwalker.model.SessionTracker
+import com.cliwalker.model.formatDuration
 import com.cliwalker.storage.SessionStore
 import com.cliwalker.strava.StravaService
 import com.cliwalker.strava.UploadResult
@@ -26,7 +27,6 @@ import com.github.ajalt.mordant.rendering.TextStyles.*
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 
 class CliWalker : CliktCommand(
     name = "cli-walker",
@@ -81,25 +81,33 @@ class CliWalker : CliktCommand(
         val quit = CompletableDeferred<Unit>()
         var connectionError: String? = null
         var currentSpeed = startSpeed
-        var sessionStartedAt: Instant? = null
-        var maxSpeed = 0.0
-        var peakSession: WalkingSession? = null
+        val tracker = SessionTracker()
+        val recorded = mutableListOf<SessionRecord>()
+
+        // Persisted as each session closes rather than only on exit, so a crash or an
+        // unplugged terminal cannot lose a walk that already finished.
+        fun record(session: SessionRecord?) {
+            if (session == null) return
+            recorded.add(session)
+            try {
+                sessionStore.append(session)
+            } catch (_: Throwable) {
+                // best-effort persistence; don't fail on write error
+            }
+        }
 
         val dashboardJob = launch { dashboard.run(this) }
 
         val trackerJob = launch {
-            connection.session.collect { s ->
-                if (s.isActive && sessionStartedAt == null) {
-                    sessionStartedAt = Clock.System.now()
-                }
-                if (s.speed > maxSpeed) maxSpeed = s.speed
-                // The pad zeroes its counters (time/distance/steps) as soon as the
-                // belt stops, and the quit handler stops the belt before we persist.
-                // Counters grow monotonically while running, so the sample with the
-                // largest elapsed time holds the session's final totals.
-                if (s.elapsedSeconds >= (peakSession?.elapsedSeconds ?: 0)) {
-                    peakSession = s
-                }
+            connection.session.collect { s -> record(tracker.onSample(s, Clock.System.now())) }
+        }
+
+        // The status flow goes quiet when the pad idles at unchanging values, so the
+        // coalesce window has to be checked on a timer rather than on samples alone.
+        val tickJob = launch {
+            while (isActive) {
+                delay(1000)
+                record(tracker.tick(Clock.System.now()))
             }
         }
 
@@ -193,43 +201,18 @@ class CliWalker : CliktCommand(
             inputJob.cancel()
             dashboardJob.cancel()
             trackerJob.cancel()
+            tickJob.cancel()
             connectJob.cancel()
             connection.disconnect()
             print("\u001B[?25h") // Restore cursor
             println()
             connectionError?.let { println(red("Connection error: $it")) }
-            val record = persistSession(sessionStore, peakSession, sessionStartedAt, maxSpeed)
-            printSessionSummary(terminal, peakSession)
-            if (record != null && !noStrava) uploadToStrava(strava, record)
+            record(tracker.finish(Clock.System.now()))
+            printSessionSummary(recorded)
+            if (!noStrava) {
+                for (session in recorded) uploadToStrava(strava, session)
+            }
         }
-    }
-
-    /** Persists the finished session and returns it, or null if there was nothing worth saving. */
-    private fun persistSession(
-        store: SessionStore,
-        session: WalkingSession?,
-        startedAt: Instant?,
-        maxSpeed: Double,
-    ): SessionRecord? {
-        val s = session ?: return null
-        if (startedAt == null || s.elapsedSeconds <= 0 || s.distanceKm <= 0.0) return null
-        val avgSpeed = s.distanceKm / (s.elapsedSeconds / 3600.0)
-        val record = SessionRecord(
-            startedAt = startedAt,
-            endedAt = Clock.System.now(),
-            durationSeconds = s.elapsedSeconds,
-            distanceKm = s.distanceKm,
-            steps = s.steps,
-            calories = s.caloriesEstimate,
-            avgSpeedKmh = avgSpeed,
-            maxSpeedKmh = maxSpeed,
-        )
-        try {
-            store.append(record)
-        } catch (_: Throwable) {
-            // best-effort persistence; don't fail on write error
-        }
-        return record
     }
 
     private suspend fun uploadToStrava(service: StravaService, record: SessionRecord) {
@@ -267,14 +250,23 @@ class CliWalker : CliktCommand(
         }
     }
 
-    private fun printSessionSummary(terminal: Terminal, session: WalkingSession?) {
-        if (session != null && session.elapsedSeconds > 0) {
-            println()
-            println(green(bold("Session Summary")))
-            println("  Distance: ${session.formattedDistance}")
-            println("  Steps:    ${session.steps}")
-            println("  Time:     ${session.formattedTime}")
-            println("  Calories: ~${session.caloriesEstimate} kcal")
+    private fun printSessionSummary(sessions: List<SessionRecord>) {
+        if (sessions.isEmpty()) return
+        val many = sessions.size > 1
+        println()
+        println(green(bold(if (many) "Session Summary (${sessions.size} sessions)" else "Session Summary")))
+        val indent = if (many) "    " else "  "
+        sessions.forEachIndexed { index, s ->
+            if (many) println("  " + bold("Session ${index + 1}"))
+            println("${indent}Distance: ${roundKm(s.distanceKm)} km")
+            println("${indent}Steps:    ${s.steps}")
+            println("${indent}Time:     ${formatDuration(s.durationSeconds)}")
+            println("${indent}Calories: ~${s.calories} kcal")
+        }
+        if (many) {
+            val distance = roundKm(sessions.sumOf { it.distanceKm })
+            val time = formatDuration(sessions.sumOf { it.durationSeconds })
+            println("  " + dim("Total: $distance km, $time, ${sessions.sumOf { it.steps }} steps"))
         }
     }
 }

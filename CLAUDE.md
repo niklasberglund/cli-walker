@@ -11,6 +11,7 @@ CLI-Walker is a macOS command-line tool for logging walking sessions with a King
 ```bash
 ./gradlew compileKotlinMacosArm64    # Compile only (fast feedback)
 ./gradlew macosArm64Binaries          # Build native executable
+./gradlew macosArm64Test              # Run tests
 ./gradlew clean                       # Clean build artifacts
 ```
 
@@ -40,7 +41,7 @@ Since this is Kotlin/Native, not JVM: `String.format()` is unavailable, JVM-spec
 
 ## Architecture
 
-The app has four layers:
+The app has these layers:
 
 1. **BLE Protocol** (`ble/WalkingPadProtocol.kt`) — Stateless encoder/decoder for the WalkingPad BLE protocol. Builds command packets (query status, start, stop, set speed) and parses status responses. All packets follow the format `[0xF7, 0xA2, cmd, param, 0xFF, checksum, 0xFD]` with checksum = `sum(bytes[1..n-2]) % 256`.
 
@@ -48,16 +49,24 @@ The app has four layers:
 
 3. **Data Model** (`model/WalkingSession.kt`) — Immutable data class holding session state (speed, distance, steps, time, belt state/mode). Includes formatting helpers and a rough calorie estimate.
 
-4. **TUI Dashboard** (`tui/Dashboard.kt`) — Mordant `textAnimation` that renders a table with live metrics. Collects from the connection's StateFlows and re-renders on each update. Includes a color-coded speed bar. Three tabs (Session, Statistics, Strava); the Strava tab shows auth status, feed muting, and the upload threshold, and edits the latter two in place via `StravaUiState`. Every tab is padded to the same width so switching never resizes the box.
+4. **Session Tracking** (`model/SessionTracker.kt`) — Turns the pad's status samples into
+   discrete `SessionRecord`s. The pad zeroes its counters whenever the belt stops, so each
+   belt run is seen as a fresh climb from zero; the tracker banks the highest-elapsed sample
+   of each run and sums them. Runs separated by less than the coalesce window (1 minute) fold
+   into a single record, so stepping off the belt — or letting it auto-stop — does not split
+   a walk into fragments that each fall below the Strava upload threshold. A longer gap closes
+   the record and starts a new one, so one app run can produce several sessions.
 
-5. **Strava Upload** (`strava/`) — OAuth 2.0 authorization-code flow plus activity
+5. **TUI Dashboard** (`tui/Dashboard.kt`) — Mordant `textAnimation` that renders a table with live metrics. Collects from the connection's StateFlows and re-renders on each update. Includes a color-coded speed bar. Three tabs (Session, Statistics, Strava); the Strava tab shows auth status, feed muting, and the upload threshold, and edits the latter two in place via `StravaUiState`. Every tab is padded to the same width so switching never resizes the box.
+
+6. **Strava Upload** (`strava/`) — OAuth 2.0 authorization-code flow plus activity
    creation. `LoopbackServer.kt` is a one-shot HTTP listener on 127.0.0.1 that catches the
    OAuth redirect (Strava has no device-code flow); `StravaApi.kt` wraps the token and
    activity endpoints over Ktor's Darwin engine; `StravaService.kt` ties them together;
    `StravaConfig.kt` and `UploadLog.kt` persist credentials and uploaded-session ids under
    `~/.cli-walker/`. Commands live in `StravaCommands.kt`.
 
-6. **Entry Point** (`Main.kt`) — Clikt command that wires everything together. Launches the dashboard coroutine, connects BLE, and prints a session summary on exit.
+7. **Entry Point** (`Main.kt`) — Clikt command that wires everything together. Launches the dashboard coroutine, connects BLE, feeds status samples to the `SessionTracker`, and persists each session as it closes. On exit it prints a summary of every session recorded during the run and uploads them.
 
 ## WalkingPad BLE Protocol Reference
 
@@ -99,7 +108,9 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
 - `~/.cli-walker/strava-uploads.json` maps session start times to Strava activity ids so
   sessions are never uploaded twice, storing `0` for "uploaded, id unknown". It is kept
   separate from the append-only `sessions.jsonl` so uploading never rewrites the session log.
-- Finished sessions upload automatically when connected; `--no-strava` skips it, and
+- Finished sessions upload automatically when connected — one upload per session closed by
+  the `SessionTracker`, so several start/stop cycles in one app run can yield several
+  activities. `--no-strava` skips it, and
   `strava sync --dry-run` writes the TCX files to `~/.cli-walker/tcx/` without uploading.
 - Activity visibility follows the athlete's account default (Privacy Controls); the API
   cannot set it. Verified: an API upload lands as `visibility: only_me` when that is the
