@@ -3,10 +3,19 @@ package com.cliwalker.tui
 import com.cliwalker.ble.WalkingPadConnection.ConnectionState
 import com.cliwalker.model.SessionRecord
 import com.cliwalker.model.WalkingSession
+import com.cliwalker.strava.formatThreshold
 import com.github.ajalt.mordant.animation.animation
+import com.github.ajalt.mordant.rendering.BorderType
+import com.github.ajalt.mordant.rendering.Line
+import com.github.ajalt.mordant.rendering.Lines
+import com.github.ajalt.mordant.rendering.Span
+import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.rendering.TextColors.*
+import com.github.ajalt.mordant.rendering.TextStyle
 import com.github.ajalt.mordant.rendering.TextStyles.*
+import com.github.ajalt.mordant.rendering.Widget
 import com.github.ajalt.mordant.table.Borders
+import com.github.ajalt.mordant.table.ColumnWidth
 import com.github.ajalt.mordant.table.table
 import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.coroutines.*
@@ -16,13 +25,111 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
+// Sentinel style used only for table borders, so rendered border spans can be picked out and
+// recolored with a gradient without disturbing any styled cell content (which is never left
+// without an explicit color).
+private val BORDER_STYLE_SENTINEL: TextStyle = TextStyle()
+
+// Endpoints sampled from the logo's purple-to-pink gradient (see Logo.kt).
+private val GRADIENT_START = Triple(101, 78, 163)
+private val GRADIENT_END = Triple(234, 175, 200)
+
+private fun hex2(v: Int): String = v.coerceIn(0, 255).toString(16).padStart(2, '0')
+
+private fun gradientStyle(t: Double): TextStyle {
+    val clamped = t.coerceIn(0.0, 1.0)
+    val r = (GRADIENT_START.first + (GRADIENT_END.first - GRADIENT_START.first) * clamped).toInt()
+    val g = (GRADIENT_START.second + (GRADIENT_END.second - GRADIENT_START.second) * clamped).toInt()
+    val b = (GRADIENT_START.third + (GRADIENT_END.third - GRADIENT_START.third) * clamped).toInt()
+    return TextColors.rgb("#${hex2(r)}${hex2(g)}${hex2(b)}")
+}
+
+// Mordant's table layout gives columnSpan cells (used by our header/footer rows) one extra
+// column of budget that isn't reflected in the border rows' width, so header/footer content
+// renders one column wider than the box border. Trim that excess from the trailing padding
+// (found by walking back from the line's end, skipping over the border pipe itself) so every
+// line matches the border row's true width.
+private fun trimToWidth(line: Line, excess: Int): Line {
+    if (excess <= 0) return line
+    val spans = line.spans.toMutableList()
+    var remaining = excess
+    var idx = spans.lastIndex
+    while (idx >= 0 && remaining > 0) {
+        val span = spans[idx]
+        if (span.text.isBlank()) {
+            val take = minOf(remaining, span.text.length)
+            val newLen = span.text.length - take
+            if (newLen <= 0) spans.removeAt(idx) else spans[idx] = Span.space(newLen, span.style)
+            remaining -= take
+        }
+        idx--
+    }
+    return Line(spans)
+}
+
+// Wraps a table widget and recolors its (unstyled) border characters with a left-to-right
+// gradient, leaving already-styled cell content untouched.
+private class GradientBorderWidget(private val inner: Widget) : Widget {
+    override fun measure(t: Terminal, width: Int) = inner.measure(t, width)
+
+    override fun render(t: Terminal, width: Int): Lines {
+        val rawLines = inner.render(t, width).lines
+        val targetWidth = (rawLines.firstOrNull()?.spans?.sumOf { it.text.length } ?: 1).coerceAtLeast(1)
+        val normalized = rawLines.map { line ->
+            val lineWidth = line.spans.sumOf { it.text.length }
+            trimToWidth(line, lineWidth - targetWidth)
+        }
+        return Lines(normalized.map { line ->
+            var x = 0
+            val spans = mutableListOf<Span>()
+            for (span in line.spans) {
+                if (span.style == BORDER_STYLE_SENTINEL) {
+                    for (ch in span.text) {
+                        spans.add(Span.word(ch.toString(), gradientStyle(x.toDouble() / targetWidth)))
+                        x++
+                    }
+                } else {
+                    spans.add(span)
+                    x += span.text.length
+                }
+            }
+            Line(spans)
+        })
+    }
+}
+
+private fun Widget.withGradientBorder(): Widget = GradientBorderWidget(this)
+
+private const val CONNECTION_STATE_WIDTH = 13 // len("Connecting...")
+private const val BELT_STATE_WIDTH = 11 // len("Starting...")
+private const val THRESHOLD_WIDTH = 8 // len("12.34 km")
+private const val PENDING_WIDTH = 24 // len("Nothing waiting to upload") - 1
+
 enum class Tab(val label: String) {
     Session("Session"),
-    Statistics("Statistics");
+    Statistics("Statistics"),
+    Strava("Strava");
 
     fun next(): Tab = entries[(ordinal + 1) % entries.size]
     fun previous(): Tab = entries[(ordinal - 1 + entries.size) % entries.size]
 }
+
+/** Everything the Strava tab shows, kept in one flow so the tab re-renders on any change. */
+data class StravaUiState(
+    val connected: Boolean = false,
+    val athleteName: String? = null,
+    val muted: Boolean = false,
+    val thresholdKm: Double = 0.0,
+    val pendingCount: Int = 0,
+    val belowThresholdCount: Int = 0,
+)
+
+private data class DashboardState(
+    val session: WalkingSession,
+    val connState: ConnectionState,
+    val tab: Tab,
+    val strava: StravaUiState,
+)
 
 class Dashboard(
     private val terminal: Terminal,
@@ -30,14 +137,17 @@ class Dashboard(
     private val connectionStateFlow: StateFlow<ConnectionState>,
     private val tabFlow: StateFlow<Tab>,
     private val history: List<SessionRecord>,
+    private val stravaFlow: StateFlow<StravaUiState>,
 ) {
     suspend fun run(scope: CoroutineScope) {
-        val animation = terminal.animation<Triple<WalkingSession, ConnectionState, Tab>> { (session, state, tab) ->
-            renderDashboard(session, state, tab)
+        val animation = terminal.animation<DashboardState> { state ->
+            renderDashboard(state)
         }
         try {
             while (scope.isActive) {
-                animation.update(Triple(sessionFlow.value, connectionStateFlow.value, tabFlow.value))
+                animation.update(
+                    DashboardState(sessionFlow.value, connectionStateFlow.value, tabFlow.value, stravaFlow.value),
+                )
                 delay(500)
             }
         } finally {
@@ -45,23 +155,62 @@ class Dashboard(
         }
     }
 
-    private fun renderDashboard(session: WalkingSession, connState: ConnectionState, tab: Tab) = when (tab) {
-        Tab.Session -> renderSessionTab(session, connState)
+    private fun renderDashboard(state: DashboardState) = when (state.tab) {
+        Tab.Session -> renderSessionTab(state.session, state.connState)
         Tab.Statistics -> renderStatisticsTab()
+        Tab.Strava -> renderStravaTab(state.strava)
+    }
+
+    // Rendered width of the other tabs, which the session tab is padded out to so switching
+    // tabs never changes the box width. The history is fixed for the lifetime of the
+    // dashboard and the Strava rows are padded to a constant width, so this is computed once.
+    private val statisticsWidth by lazy {
+        maxOf(
+            renderStatisticsTab().measure(terminal).max,
+            buildStravaTable(stravaFlow.value, valueColumnWidth = null).measure(terminal).max,
+        )
+    }
+
+    // Same trick as [sessionChromeWidth], for the Strava table.
+    private val stravaChromeWidth by lazy {
+        buildStravaTable(stravaFlow.value, valueColumnWidth = 1).measure(terminal).max - 1
+    }
+
+    // Width of the session table without its value column (outer borders + label column).
+    // Measured empirically by rendering the table with the value column shrunk to 1, because
+    // the spanning header/footer cells inflate the label column in non-obvious ways. Constant
+    // for the lifetime of the dashboard since labels, header, and footer never change.
+    private val sessionChromeWidth by lazy {
+        buildSessionTable(sessionFlow.value, connectionStateFlow.value, valueColumnWidth = 1)
+            .measure(terminal).max - 1
     }
 
     private fun renderTabBar(active: Tab): String {
         val parts = Tab.entries.map { t ->
             val label = " ${t.label} "
-            if (t == active) inverse(label) else gray(label)
+            if (t == active) (black on brightCyan)(label) else gray(label)
         }
         return parts.joinToString(" ")
     }
 
-    private fun renderSessionTab(session: WalkingSession, connState: ConnectionState) = table {
+    // Pad the session table's value column so both tabs render at the same width.
+    private fun renderSessionTab(session: WalkingSession, connState: ConnectionState): Widget {
+        val natural = buildSessionTable(session, connState, valueColumnWidth = null)
+        if (statisticsWidth <= natural.measure(terminal).max) return natural
+        return buildSessionTable(session, connState, valueColumnWidth = statisticsWidth - sessionChromeWidth)
+    }
+
+    private fun buildSessionTable(session: WalkingSession, connState: ConnectionState, valueColumnWidth: Int?): Widget = table {
+        borderStyle = BORDER_STYLE_SENTINEL
+        borderType = BorderType.ROUNDED
+
+        if (valueColumnWidth != null) {
+            column(1) { width = ColumnWidth.Fixed(valueColumnWidth) }
+        }
+
         header {
             row {
-                cell(renderTabBar(Tab.Session) + "\n" + bold("CLI-Walker — Kingsmith WalkingPad Monitor")) { columnSpan = 2 }
+                cell(renderTabBar(Tab.Session) + "\n" + bold(brightCyan("CLI-Walker - Kingsmith WalkingPad Monitor"))) { columnSpan = 2 }
             }
         }
 
@@ -82,36 +231,106 @@ class Dashboard(
             }
             row {
                 cell(gray("Distance"))
-                cell(cyan(session.formattedDistance))
+                cell(green(session.formattedDistance))
             }
             row {
                 cell(gray("Steps"))
-                cell(cyan(session.steps.toString()))
+                cell(magenta(session.steps.toString()))
             }
             row {
                 cell(gray("Time"))
-                cell(cyan(session.formattedTime))
+                cell(blue(session.formattedTime))
             }
             row {
                 cell(gray("Calories"))
-                cell(cyan("~${session.caloriesEstimate} kcal"))
+                cell(yellow("~${session.caloriesEstimate} kcal"))
             }
         }
 
         footer {
             row {
-                cell(gray("↑/↓ ±0.5  ⌃↑/⌃↓ ±0.1  ␣ pause/resume  ⇥/←→ tabs  q quit")) { columnSpan = 2 }
+                cell(gray("Up/Down +/-0.5  Ctrl+Up/Down +/-0.1  Space pause/resume  Tab/Arrows tabs  q quit")) { columnSpan = 2 }
             }
         }
+    }.withGradientBorder()
+
+    // Pad the Strava table's value column so every tab renders at the same width.
+    private fun renderStravaTab(strava: StravaUiState): Widget {
+        val natural = buildStravaTable(strava, valueColumnWidth = null)
+        if (statisticsWidth <= natural.measure(terminal).max) return natural
+        return buildStravaTable(strava, valueColumnWidth = statisticsWidth - stravaChromeWidth)
     }
 
-    private fun renderStatisticsTab() = table {
-        val zone = TimeZone.currentSystemDefault()
-        val cols = 5
+    private fun buildStravaTable(strava: StravaUiState, valueColumnWidth: Int?): Widget = table {
+        borderStyle = BORDER_STYLE_SENTINEL
+        borderType = BorderType.ROUNDED
+
+        if (valueColumnWidth != null) {
+            column(1) { width = ColumnWidth.Fixed(valueColumnWidth) }
+        }
 
         header {
             row {
-                cell(renderTabBar(Tab.Statistics) + "\n" + bold("Statistics")) { columnSpan = cols }
+                cell(renderTabBar(Tab.Strava) + "\n" + bold(brightCyan("Strava"))) { columnSpan = 2 }
+            }
+        }
+
+        body {
+            cellBorders = Borders.TOP_BOTTOM
+
+            row {
+                cell(gray("Account"))
+                cell(
+                    if (strava.connected) {
+                        green("Connected") + gray("  ${strava.athleteName ?: "unknown athlete"}")
+                    } else {
+                        yellow("Not connected") + gray("  run `cli-walker strava login`")
+                    },
+                )
+            }
+            row {
+                cell(gray("Feed"))
+                cell(
+                    if (strava.muted) yellow("Muted") + gray("  hidden from followers' feeds")
+                    else green("Visible") + gray("  shown in followers' feeds"),
+                )
+            }
+            row {
+                cell(gray("Min distance"))
+                // Padded so the table width does not shift while the threshold is adjusted.
+                cell(cyan(formatThreshold(strava.thresholdKm).padEnd(THRESHOLD_WIDTH)) + gray("  shorter sessions are not uploaded"))
+            }
+            row {
+                cell(gray("Pending"))
+                cell(
+                    if (strava.pendingCount == 0) gray("Nothing waiting to upload".padEnd(PENDING_WIDTH))
+                    else magenta("${strava.pendingCount} session(s) waiting".padEnd(PENDING_WIDTH)),
+                )
+            }
+            if (strava.belowThresholdCount > 0) {
+                row {
+                    cell(gray("Below min"))
+                    cell(gray("${strava.belowThresholdCount} session(s) skipped by the threshold"))
+                }
+            }
+        }
+
+        footer {
+            row {
+                cell(gray("Up/Down +/-100 m  Ctrl+Up/Down +/-10 m  m mute/unmute  Tab/Arrows tabs  q quit")) { columnSpan = 2 }
+            }
+        }
+    }.withGradientBorder()
+
+    private fun renderStatisticsTab(): Widget = table {
+        val zone = TimeZone.currentSystemDefault()
+
+        borderStyle = BORDER_STYLE_SENTINEL
+        borderType = BorderType.ROUNDED
+
+        header {
+            row {
+                cell(renderTabBar(Tab.Statistics) + "\n" + bold(brightCyan("Statistics"))) { columnSpan = 2 }
             }
         }
 
@@ -119,33 +338,18 @@ class Dashboard(
             cellBorders = Borders.TOP_BOTTOM
 
             if (history.isEmpty()) {
-                row { cell(gray("No sessions recorded yet — go for a walk!")) { columnSpan = cols } }
+                row { cell(gray("No sessions recorded yet - go for a walk!")) { columnSpan = 2 } }
             } else {
-                val totalDist = history.sumOf { it.distanceKm }
-                val totalSteps = history.sumOf { it.steps }
-                val totalCal = history.sumOf { it.calories }
-                val totalSecs = history.sumOf { it.durationSeconds }
+                fun totalsLine(sessions: Int, dist: Double, steps: Int, secs: Int, cal: Int) =
+                    cyan("$sessions sessions") + "  " +
+                        green("${roundTo2(dist)} km") + "  " +
+                        magenta("$steps steps") + "  " +
+                        blue(formatDuration(secs)) + "  " +
+                        yellow("~$cal kcal")
 
-                row { cell(bold(underline("Totals"))) { columnSpan = cols } }
                 row {
-                    cell(gray("Sessions"))
-                    cell(cyan(history.size.toString())) { columnSpan = cols - 1 }
-                }
-                row {
-                    cell(gray("Distance"))
-                    cell(cyan("${roundTo2(totalDist)} km")) { columnSpan = cols - 1 }
-                }
-                row {
-                    cell(gray("Steps"))
-                    cell(cyan(totalSteps.toString())) { columnSpan = cols - 1 }
-                }
-                row {
-                    cell(gray("Time"))
-                    cell(cyan(formatDuration(totalSecs))) { columnSpan = cols - 1 }
-                }
-                row {
-                    cell(gray("Calories"))
-                    cell(cyan("~$totalCal kcal")) { columnSpan = cols - 1 }
+                    cell(gray("Totals"))
+                    cell(totalsLine(history.size, history.sumOf { it.distanceKm }, history.sumOf { it.steps }, history.sumOf { it.durationSeconds }, history.sumOf { it.calories }))
                 }
 
                 val now = Clock.System.now().toLocalDateTime(zone)
@@ -153,33 +357,12 @@ class Dashboard(
                     val ldt = it.startedAt.toLocalDateTime(zone)
                     ldt.year == now.year && ldt.monthNumber == now.monthNumber
                 }
-                row { cell(bold(underline("This Month (${MONTHS[now.monthNumber - 1]} ${now.year})"))) { columnSpan = cols } }
-                if (thisMonth.isEmpty()) {
-                    row { cell(gray("No sessions this month yet")) { columnSpan = cols } }
-                } else {
-                    val mDist = thisMonth.sumOf { it.distanceKm }
-                    val mSteps = thisMonth.sumOf { it.steps }
-                    val mCal = thisMonth.sumOf { it.calories }
-                    val mSecs = thisMonth.sumOf { it.durationSeconds }
-                    row {
-                        cell(gray("Sessions"))
-                        cell(cyan(thisMonth.size.toString())) { columnSpan = cols - 1 }
-                    }
-                    row {
-                        cell(gray("Distance"))
-                        cell(cyan("${roundTo2(mDist)} km")) { columnSpan = cols - 1 }
-                    }
-                    row {
-                        cell(gray("Steps"))
-                        cell(cyan(mSteps.toString())) { columnSpan = cols - 1 }
-                    }
-                    row {
-                        cell(gray("Time"))
-                        cell(cyan(formatDuration(mSecs))) { columnSpan = cols - 1 }
-                    }
-                    row {
-                        cell(gray("Calories"))
-                        cell(cyan("~$mCal kcal")) { columnSpan = cols - 1 }
+                row {
+                    cell(gray("This Month"))
+                    if (thisMonth.isEmpty()) {
+                        cell(gray("No sessions yet"))
+                    } else {
+                        cell(totalsLine(thisMonth.size, thisMonth.sumOf { it.distanceKm }, thisMonth.sumOf { it.steps }, thisMonth.sumOf { it.durationSeconds }, thisMonth.sumOf { it.calories }))
                     }
                 }
 
@@ -189,43 +372,31 @@ class Dashboard(
                 val topSpeed = history.maxBy { it.maxSpeedKmh }
                 val mostSteps = history.maxBy { it.steps }
 
-                row { cell(bold(underline("Personal Bests"))) { columnSpan = cols } }
                 row {
-                    cell(gray("Longest distance"))
-                    cell(cyan("${roundTo2(longestDist.distanceKm)} km") + gray("  ${formatDate(longestDist.startedAt, zone)}")) { columnSpan = cols - 1 }
+                    cell(gray("Best distance"))
+                    cell(yellow("★ ") + green("${roundTo2(longestDist.distanceKm)} km") + gray("  ${formatDate(longestDist.startedAt, zone)}"))
                 }
                 row {
-                    cell(gray("Longest duration"))
-                    cell(cyan(formatDuration(longestTime.durationSeconds)) + gray("  ${formatDate(longestTime.startedAt, zone)}")) { columnSpan = cols - 1 }
-                }
-                row {
-                    cell(gray("Best avg speed"))
-                    cell(cyan("${roundTo1(fastestAvg.avgSpeedKmh)} km/h") + gray("  ${formatDate(fastestAvg.startedAt, zone)}")) { columnSpan = cols - 1 }
+                    cell(gray("Best duration"))
+                    cell(yellow("★ ") + blue(formatDuration(longestTime.durationSeconds)) + gray("  ${formatDate(longestTime.startedAt, zone)}"))
                 }
                 row {
                     cell(gray("Top speed"))
-                    cell(cyan("${roundTo1(topSpeed.maxSpeedKmh)} km/h") + gray("  ${formatDate(topSpeed.startedAt, zone)}")) { columnSpan = cols - 1 }
+                    cell(yellow("★ ") + cyan("${roundTo1(topSpeed.maxSpeedKmh)} km/h") + gray("  avg ${roundTo1(fastestAvg.avgSpeedKmh)} km/h"))
                 }
                 row {
                     cell(gray("Most steps"))
-                    cell(cyan(mostSteps.steps.toString()) + gray("  ${formatDate(mostSteps.startedAt, zone)}")) { columnSpan = cols - 1 }
+                    cell(yellow("★ ") + magenta(mostSteps.steps.toString()) + gray("  ${formatDate(mostSteps.startedAt, zone)}"))
                 }
 
-                row { cell(bold(underline("Recent Sessions"))) { columnSpan = cols } }
-                row {
-                    cell(gray("Date"))
-                    cell(gray("Duration"))
-                    cell(gray("Distance"))
-                    cell(gray("Steps"))
-                    cell(gray("Avg km/h"))
-                }
-                history.takeLast(10).reversed().forEach { r ->
+                row { cell(bold(brightCyan("Recent Sessions"))) { columnSpan = 2 } }
+                history.takeLast(5).reversed().forEach { r ->
                     row {
-                        cell(formatDate(r.startedAt, zone))
-                        cell(formatDuration(r.durationSeconds))
-                        cell("${roundTo2(r.distanceKm)} km")
-                        cell(r.steps.toString())
-                        cell(roundTo1(r.avgSpeedKmh))
+                        cell(gray(formatDate(r.startedAt, zone)))
+                        cell(blue(formatDuration(r.durationSeconds)) + "  " +
+                            green("${roundTo2(r.distanceKm)} km") + "  " +
+                            magenta("${r.steps} steps") + "  " +
+                            cyan("${roundTo1(r.avgSpeedKmh)} km/h avg"))
                     }
                 }
             }
@@ -233,24 +404,27 @@ class Dashboard(
 
         footer {
             row {
-                cell(gray("⇥/←→ tabs  q quit")) { columnSpan = cols }
+                cell(gray("Tab/Arrows tabs  q quit")) { columnSpan = 2 }
             }
         }
-    }
+    }.withGradientBorder()
 
+    // Padded to the widest possible label so the table's width never changes as the
+    // connection/belt state changes, which would otherwise leave stale border fragments
+    // on redraw in some terminals.
     private fun formatConnectionState(state: ConnectionState): String = when (state) {
-        ConnectionState.Disconnected -> red("Disconnected")
-        ConnectionState.Scanning -> yellow("Scanning...")
-        ConnectionState.Connecting -> yellow("Connecting...")
-        ConnectionState.Connected -> green("Connected")
-        ConnectionState.Error -> brightRed("Error")
+        ConnectionState.Disconnected -> red("Disconnected".padEnd(CONNECTION_STATE_WIDTH))
+        ConnectionState.Scanning -> yellow("Scanning...".padEnd(CONNECTION_STATE_WIDTH))
+        ConnectionState.Connecting -> yellow("Connecting...".padEnd(CONNECTION_STATE_WIDTH))
+        ConnectionState.Connected -> green("Connected".padEnd(CONNECTION_STATE_WIDTH))
+        ConnectionState.Error -> brightRed("Error".padEnd(CONNECTION_STATE_WIDTH))
     }.toString()
 
     private fun formatBeltState(session: WalkingSession): String = when (session.state) {
-        com.cliwalker.model.BeltState.Running -> green("Running")
-        com.cliwalker.model.BeltState.Starting, com.cliwalker.model.BeltState.Accelerating -> yellow("Starting...")
-        com.cliwalker.model.BeltState.Standby -> yellow("Standby")
-        com.cliwalker.model.BeltState.Idle -> gray("Idle")
+        com.cliwalker.model.BeltState.Running -> green("Running".padEnd(BELT_STATE_WIDTH))
+        com.cliwalker.model.BeltState.Starting, com.cliwalker.model.BeltState.Accelerating -> yellow("Starting...".padEnd(BELT_STATE_WIDTH))
+        com.cliwalker.model.BeltState.Standby -> yellow("Standby".padEnd(BELT_STATE_WIDTH))
+        com.cliwalker.model.BeltState.Idle -> gray("Idle".padEnd(BELT_STATE_WIDTH))
     }.toString()
 
     private fun formatSpeed(session: WalkingSession): String {

@@ -26,22 +26,6 @@ kotlin {
         }
     }
 
-    val targetName = if (hostArch == "aarch64") "macosArm64" else "macosX64"
-
-    tasks.register<Exec>("run") {
-        dependsOn("${targetName}Binaries")
-        group = "application"
-        description = "Build and run CLI-Walker (non-interactive)"
-        executable = layout.buildDirectory
-            .file("bin/$targetName/debugExecutable/cli-walker.kexe")
-            .get().asFile.absolutePath
-        standardInput = System.`in`
-        standardOutput = System.out
-        errorOutput = System.err
-    }
-
-
-
     sourceSets {
         commonMain.dependencies {
             implementation("com.juul.kable:kable-core:0.40.0")
@@ -51,6 +35,8 @@ kotlin {
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.2")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+            implementation("io.ktor:ktor-client-core:3.1.3")
+            implementation("io.ktor:ktor-client-darwin:3.1.3")
         }
     }
 }

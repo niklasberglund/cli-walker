@@ -29,6 +29,7 @@ class WalkingPadConnection(
 
     private var peripheral: Peripheral? = null
     private var pollJob: Job? = null
+    private var listenJob: Job? = null
     private var pollPaused = false
     private var lastCommandTime = TimeSource.Monotonic.markNow() - 1.seconds
     private val minCommandInterval = 700.milliseconds
@@ -88,7 +89,7 @@ class WalkingPadConnection(
     }
 
     private fun startListening(peripheral: Peripheral) {
-        scope.launch {
+        listenJob = scope.launch {
             peripheral.observe(notifyCharacteristic).collect { data ->
                 if (debug) logReceived(data)
 
@@ -137,7 +138,7 @@ class WalkingPadConnection(
 
     suspend fun stopBelt() {
         if (debug) debugLog("CMD: stopBelt")
-        sendCommand(WalkingPadProtocol.buildSetSpeedCommand(0.0))
+        sendCommand(WalkingPadProtocol.buildStopCommand())
     }
 
     suspend fun setSpeed(speedKmh: Double) {
@@ -148,6 +149,10 @@ class WalkingPadConnection(
 
     private suspend fun sendCommand(data: ByteArray, throttle: Boolean = true) {
         val p = peripheral ?: return
+        // The WalkingPad drops its BLE connection (clearing GATT services) when the
+        // belt stops or the pad goes to standby. Writing then fails with
+        // NoSuchElementException for the write characteristic, so bail if not connected.
+        if (p.state.value !is State.Connected) return
         if (throttle) {
             val elapsed = lastCommandTime.elapsedNow()
             if (elapsed < minCommandInterval) {
@@ -155,8 +160,16 @@ class WalkingPadConnection(
             }
         }
         if (debug) debugLog("TX: ${data.toHex()}")
-        p.write(writeCharacteristic, data, WriteType.WithoutResponse)
-        lastCommandTime = TimeSource.Monotonic.markNow()
+        try {
+            p.write(writeCharacteristic, data, WriteType.WithoutResponse)
+            lastCommandTime = TimeSource.Monotonic.markNow()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A failed command write (e.g. peripheral disconnected mid-write) must
+            // never crash the app; just log it in debug mode.
+            if (debug) debugLog("TX FAILED: ${e.message}")
+        }
     }
 
     private fun logReceived(data: ByteArray) {
@@ -183,6 +196,7 @@ class WalkingPadConnection(
 
     suspend fun disconnect() {
         pollJob?.cancel()
+        listenJob?.cancel()
         peripheral?.disconnect()
         peripheral = null
         _connectionState.value = ConnectionState.Disconnected

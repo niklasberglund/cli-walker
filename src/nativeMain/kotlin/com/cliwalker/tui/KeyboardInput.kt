@@ -15,6 +15,7 @@ enum class KeyEvent {
     CtrlArrowDown,
     Space,
     Tab,
+    ToggleMute,
     Quit,
 }
 
@@ -34,11 +35,15 @@ class KeyboardInput {
                 }
 
                 when (byte) {
-                    'q'.code, 'Q'.code -> {
+                    // 0x03 is Ctrl+C, which reaches us as a byte rather than a
+                    // signal because raw mode clears ISIG. Quitting through the
+                    // normal path means the session still gets stopped and saved.
+                    'q'.code, 'Q'.code, 0x03 -> {
                         emit(KeyEvent.Quit)
                         return@flow
                     }
                     ' '.code -> emit(KeyEvent.Space)
+                    'm'.code, 'M'.code -> emit(KeyEvent.ToggleMute)
                     '\t'.code -> emit(KeyEvent.Tab)
                     0x1B -> {
                         // CSI sequence: ESC [ params final
@@ -83,7 +88,10 @@ class KeyboardInput {
 
         val raw = alloc<termios>()
         tcgetattr(STDIN_FILENO, raw.ptr)
-        raw.c_lflag = raw.c_lflag and (ICANON or ECHO).toULong().inv()
+        // ISIG is cleared so Ctrl+C/Ctrl+Z arrive as bytes instead of signals —
+        // an unhandled SIGINT would kill the process before the session is
+        // persisted and before the terminal mode is restored.
+        raw.c_lflag = raw.c_lflag and (ICANON or ECHO or ISIG).toULong().inv()
         // Fully non-blocking: VMIN=0, VTIME=0 — read() returns immediately.
         // The coroutine yields via delay() between polls so the event loop
         // can run other coroutines (BLE poll, notify collector, dashboard).

@@ -39,7 +39,7 @@ object WalkingPadProtocol {
     }
 
     fun buildStopCommand(): ByteArray {
-        return buildCommand(0xA2.toByte(), 0x01, 0x00)
+        return buildCommand(0xA2.toByte(), 0x04, 0x00)
     }
 
     fun buildSetModeManualCommand(): ByteArray {
