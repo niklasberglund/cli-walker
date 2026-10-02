@@ -111,6 +111,17 @@ class CliWalker : CliktCommand(
             }
         }
 
+        val connectJob = launch {
+            try {
+                connection.connect()
+                connection.startBelt(startSpeed)
+            } catch (e: Exception) {
+                if (e !is CancellationException) {
+                    connectionError = e.message
+                }
+            }
+        }
+
         val keyboard = KeyboardInput()
         val inputJob = launch {
             keyboard.events().collect { event ->
@@ -171,26 +182,22 @@ class CliWalker : CliktCommand(
                         activeTab.value = activeTab.value.previous()
                     }
                     KeyEvent.Quit -> {
+                        // An in-flight startup startBelt would otherwise finish its
+                        // start sequence after we have sent the stop.
+                        connectJob.cancelAndJoin()
                         try {
-                            connection.stopBelt()
-                            // stopBelt writes with WriteType.WithoutResponse, so give
-                            // CoreBluetooth time to actually transmit the stop packet
-                            // before the connection is torn down on exit.
-                            delay(1000)
+                            // The pad starts the belt when sent a stop while idle, so
+                            // only stop a belt that is actually moving.
+                            if (connection.session.value.isActive) {
+                                connection.stopBelt()
+                                // stopBelt writes with WriteType.WithoutResponse, so give
+                                // CoreBluetooth time to actually transmit the stop packet
+                                // before the connection is torn down on exit.
+                                delay(1000)
+                            }
                         } catch (_: Exception) {}
                         quit.complete(Unit)
                     }
-                }
-            }
-        }
-
-        val connectJob = launch {
-            try {
-                connection.connect()
-                connection.startBelt(startSpeed)
-            } catch (e: Exception) {
-                if (e !is CancellationException) {
-                    connectionError = e.message
                 }
             }
         }
