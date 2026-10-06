@@ -1,6 +1,6 @@
 package com.cliwalker.tui
 
-import com.cliwalker.ble.WalkingPadConnection.ConnectionState
+import com.cliwalker.ble.ConnectionState
 import com.cliwalker.model.SessionRecord
 import com.cliwalker.model.WalkingSession
 import com.cliwalker.strava.formatThreshold
@@ -143,8 +143,18 @@ class Dashboard(
         val animation = terminal.animation<DashboardState> { state ->
             renderDashboard(state)
         }
+        // Mordant's Size has no value equality, so compare its dimensions.
+        var size = terminal.updateSize().let { it.width to it.height }
         try {
             while (scope.isActive) {
+                // A resize reflows what is already on screen, so the animation's cursor
+                // arithmetic no longer lines up with its last frame; redraw from scratch.
+                val newSize = terminal.updateSize().let { it.width to it.height }
+                if (newSize != size) {
+                    size = newSize
+                    animation.stop()
+                    printHeader()
+                }
                 animation.update(
                     DashboardState(sessionFlow.value, connectionStateFlow.value, tabFlow.value, stravaFlow.value),
                 )
@@ -161,14 +171,20 @@ class Dashboard(
         Tab.Strava -> renderStravaTab(state.strava)
     }
 
-    // Rendered width of the other tabs, which the session tab is padded out to so switching
-    // tabs never changes the box width. The history is fixed for the lifetime of the
-    // dashboard and the Strava rows are padded to a constant width, so this is computed once.
-    private val statisticsWidth by lazy {
+    // Natural width of the widest of the Statistics and Strava tabs, which every tab is padded
+    // out to so switching tabs never changes the box width. The history is fixed for the
+    // lifetime of the dashboard and the Strava rows are padded to a constant width, so this
+    // is computed once.
+    private val tabWidth by lazy {
         maxOf(
-            renderStatisticsTab().measure(terminal).max,
+            buildStatisticsTable(valueColumnWidth = null).measure(terminal).max,
             buildStravaTable(stravaFlow.value, valueColumnWidth = null).measure(terminal).max,
         )
+    }
+
+    // Same trick as [sessionChromeWidth], for the Statistics table.
+    private val statisticsChromeWidth by lazy {
+        buildStatisticsTable(valueColumnWidth = 1).measure(terminal).max - 1
     }
 
     // Same trick as [sessionChromeWidth], for the Strava table.
@@ -193,11 +209,11 @@ class Dashboard(
         return parts.joinToString(" ")
     }
 
-    // Pad the session table's value column so both tabs render at the same width.
+    // Pad the session table's value column so every tab renders at the same width.
     private fun renderSessionTab(session: WalkingSession, connState: ConnectionState): Widget {
         val natural = buildSessionTable(session, connState, valueColumnWidth = null)
-        if (statisticsWidth <= natural.measure(terminal).max) return natural
-        return buildSessionTable(session, connState, valueColumnWidth = statisticsWidth - sessionChromeWidth)
+        if (tabWidth <= natural.measure(terminal).max) return natural
+        return buildSessionTable(session, connState, valueColumnWidth = tabWidth - sessionChromeWidth)
     }
 
     private fun buildSessionTable(session: WalkingSession, connState: ConnectionState, valueColumnWidth: Int?): Widget = table {
@@ -257,8 +273,8 @@ class Dashboard(
     // Pad the Strava table's value column so every tab renders at the same width.
     private fun renderStravaTab(strava: StravaUiState): Widget {
         val natural = buildStravaTable(strava, valueColumnWidth = null)
-        if (statisticsWidth <= natural.measure(terminal).max) return natural
-        return buildStravaTable(strava, valueColumnWidth = statisticsWidth - stravaChromeWidth)
+        if (tabWidth <= natural.measure(terminal).max) return natural
+        return buildStravaTable(strava, valueColumnWidth = tabWidth - stravaChromeWidth)
     }
 
     private fun buildStravaTable(strava: StravaUiState, valueColumnWidth: Int?): Widget = table {
@@ -322,11 +338,21 @@ class Dashboard(
         }
     }.withGradientBorder()
 
-    private fun renderStatisticsTab(): Widget = table {
+    private fun renderStatisticsTab(): Widget {
+        val natural = buildStatisticsTable(valueColumnWidth = null)
+        if (tabWidth <= natural.measure(terminal).max) return natural
+        return buildStatisticsTable(valueColumnWidth = tabWidth - statisticsChromeWidth)
+    }
+
+    private fun buildStatisticsTable(valueColumnWidth: Int?): Widget = table {
         val zone = TimeZone.currentSystemDefault()
 
         borderStyle = BORDER_STYLE_SENTINEL
         borderType = BorderType.ROUNDED
+
+        if (valueColumnWidth != null) {
+            column(1) { width = ColumnWidth.Fixed(valueColumnWidth) }
+        }
 
         header {
             row {

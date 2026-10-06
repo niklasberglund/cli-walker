@@ -1,6 +1,9 @@
 package com.cliwalker
 
+import com.cliwalker.ble.PadConnection
 import com.cliwalker.ble.WalkingPadConnection
+import com.cliwalker.demo.DemoPadConnection
+import com.cliwalker.demo.prepareDemoHome
 import com.cliwalker.model.SessionRecord
 import com.cliwalker.model.SessionTracker
 import com.cliwalker.model.formatDuration
@@ -13,7 +16,7 @@ import com.cliwalker.tui.KeyEvent
 import com.cliwalker.tui.KeyboardInput
 import com.cliwalker.tui.StravaUiState
 import com.cliwalker.tui.Tab
-import com.cliwalker.tui.printLogo
+import com.cliwalker.tui.printHeader
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
@@ -41,6 +44,9 @@ class CliWalker : CliktCommand(
     private val noStrava by option("--no-strava", help = "Do not upload this session to Strava")
         .flag()
 
+    // Simulated pad and sample data in a throwaway HOME, for screenshots and recordings.
+    private val demo by option("--demo", hidden = true).flag()
+
     // Registering subcommands would normally make one mandatory; the bare `cli-walker`
     // invocation must keep launching the dashboard.
     override val invokeWithoutSubcommand = true
@@ -60,11 +66,15 @@ class CliWalker : CliktCommand(
     }
 
     private suspend fun walk() = coroutineScope {
-        print("[2J[H") // Clear screen and move cursor to top
-        println()
-        printLogo()
+        // The alternate screen has no scrollback, so a resize (iTerm adds or removes its tab
+        // bar when tabs open or close) cannot pull earlier shell output into view.
+        print("\u001B[?1049h")
+        printHeader()
+        if (demo) prepareDemoHome()
         val terminal = Terminal()
-        val connection = WalkingPadConnection(this, debug = debug)
+        terminal.cursor.hide(showOnExit = true)
+        val connection: PadConnection =
+            if (demo) DemoPadConnection(this) else WalkingPadConnection(this, debug = debug)
         val activeTab = MutableStateFlow(Tab.Session)
         val sessionStore = SessionStore()
         val history = sessionStore.load()
@@ -206,17 +216,20 @@ class CliWalker : CliktCommand(
             quit.await()
         } finally {
             inputJob.cancel()
-            dashboardJob.cancel()
+            // The dashboard clears its animation as it stops, which moves the cursor up over
+            // its last frame; wait for that so it cannot erase the summary printed below.
+            withContext(NonCancellable) { dashboardJob.cancelAndJoin() }
             trackerJob.cancel()
             tickJob.cancel()
             connectJob.cancel()
             connection.disconnect()
+            print("\u001B[?1049l") // Leave the alternate screen
             print("\u001B[?25h") // Restore cursor
             println()
             connectionError?.let { println(red("Connection error: $it")) }
             record(tracker.finish(Clock.System.now()))
             printSessionSummary(recorded)
-            if (!noStrava) {
+            if (!noStrava && !demo) {
                 for (session in recorded) uploadToStrava(strava, session)
             }
         }

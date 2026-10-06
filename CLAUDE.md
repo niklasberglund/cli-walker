@@ -25,7 +25,10 @@ For x86 Macs, replace `macosArm64` with `macosX64` in all commands.
 ./run.sh                  # Build and run the walking dashboard
 ./run.sh strava login     # Authorize against Strava
 ./run.sh strava sync      # Upload past sessions
+./run.sh --demo           # Simulated pad + sample history in a temp HOME (hidden flag)
 ```
+
+`docs/demo.gif` is recorded from demo mode with VHS: `vhs demo/demo.tape` after building.
 
 The app is an interactive TUI (raw keyboard input, live dashboard), so it must be run as a direct child of the terminal — `./run.sh` builds via Gradle and then `exec`s the binary. A Gradle `Exec` task pipes stdio and breaks the TUI, so there is deliberately no Gradle `run` task.
 

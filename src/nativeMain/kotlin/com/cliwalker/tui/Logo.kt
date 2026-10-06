@@ -40,3 +40,9 @@ val LOGO: String = LOGO_ART.joinToString("\n") { row ->
 } + "\n\n"
 
 fun printLogo() = print(LOGO)
+
+// Clears the screen and prints the logo above where the dashboard is drawn.
+fun printHeader() {
+    print("\u001B[2J\u001B[H\n")
+    printLogo()
+}

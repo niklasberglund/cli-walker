@@ -19,13 +19,13 @@ import kotlin.uuid.Uuid
 class WalkingPadConnection(
     private val scope: CoroutineScope,
     private val debug: Boolean = false,
-) {
+) : PadConnection {
 
     private val _session = MutableStateFlow(WalkingSession())
-    val session: StateFlow<WalkingSession> = _session.asStateFlow()
+    override val session: StateFlow<WalkingSession> = _session.asStateFlow()
 
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+    override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private var peripheral: Peripheral? = null
     private var pollJob: Job? = null
@@ -44,15 +44,7 @@ class WalkingPadConnection(
         characteristic = Uuid.parse(WalkingPadProtocol.WRITE_CHARACTERISTIC_UUID),
     )
 
-    enum class ConnectionState {
-        Disconnected,
-        Scanning,
-        Connecting,
-        Connected,
-        Error,
-    }
-
-    suspend fun connect() {
+    override suspend fun connect() {
         _connectionState.value = ConnectionState.Scanning
 
         val serviceUuid = Uuid.parse(WalkingPadProtocol.SERVICE_UUID)
@@ -127,7 +119,7 @@ class WalkingPadConnection(
         }
     }
 
-    suspend fun startBelt(speedKmh: Double = 2.5) = withPollPaused {
+    override suspend fun startBelt(speedKmh: Double) = withPollPaused {
         if (debug) debugLog("CMD: startBelt speed=$speedKmh")
         sendCommand(WalkingPadProtocol.buildSetModeManualCommand())
         delay(300)
@@ -136,12 +128,12 @@ class WalkingPadConnection(
         sendCommand(WalkingPadProtocol.buildSetSpeedCommand(speedKmh))
     }
 
-    suspend fun stopBelt() {
+    override suspend fun stopBelt() {
         if (debug) debugLog("CMD: stopBelt")
         sendCommand(WalkingPadProtocol.buildStopCommand())
     }
 
-    suspend fun setSpeed(speedKmh: Double) {
+    override suspend fun setSpeed(speedKmh: Double) {
         val clamped = speedKmh.coerceIn(0.5, 6.0)
         if (debug) debugLog("CMD: setSpeed $clamped")
         sendCommand(WalkingPadProtocol.buildSetSpeedCommand(clamped))
@@ -194,7 +186,7 @@ class WalkingPadConnection(
         fflush(stderr)
     }
 
-    suspend fun disconnect() {
+    override suspend fun disconnect() {
         pollJob?.cancel()
         listenJob?.cancel()
         peripheral?.disconnect()
