@@ -6,9 +6,15 @@ import com.juul.kable.WriteType
 import com.juul.kable.logs.Logging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.toKString
+import kotlinx.datetime.Clock
+import platform.posix.S_IRWXU
 import platform.posix.fflush
-import platform.posix.stderr
-import platform.posix.fprintf
+import platform.posix.fopen
+import platform.posix.fputs
+import platform.posix.getenv
+import platform.posix.mkdir
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -33,6 +39,15 @@ class WalkingPadConnection(
     private var pollPaused = false
     private var lastCommandTime = TimeSource.Monotonic.markNow() - 1.seconds
     private val minCommandInterval = 700.milliseconds
+
+    // Written to a file rather than stderr, which would draw over the dashboard.
+    private val debugFile = if (debug) {
+        val dir = "${getenv("HOME")?.toKString() ?: "."}/.cli-walker"
+        mkdir(dir, S_IRWXU.convert())
+        fopen("$dir/ble.log", "a")
+    } else {
+        null
+    }
 
     private val notifyCharacteristic = characteristicOf(
         service = Uuid.parse(WalkingPadProtocol.SERVICE_UUID),
@@ -169,7 +184,7 @@ class WalkingPadConnection(
         val parsed = WalkingPadProtocol.parseResponse(data)
         val detail = if (parsed is ParsedResponse.Status) {
             val s = parsed.session
-            "state=${s.state} speed=${s.speed} dist=${s.distanceKm} steps=${s.steps} time=${s.elapsedSeconds}s mode=${s.mode}"
+            "state=${s.state}(${s.rawState}) speed=${s.speed} dist=${s.distanceKm} steps=${s.steps} time=${s.elapsedSeconds}s mode=${s.mode}"
         } else {
             "unknown"
         }
@@ -177,13 +192,9 @@ class WalkingPadConnection(
     }
 
     private fun debugLog(msg: String) {
-        val colored = when {
-            msg.startsWith("TX:") || msg.startsWith("CMD:") -> "\u001B[32m$msg\u001B[0m" // green
-            msg.startsWith("RX:") -> "\u001B[34m$msg\u001B[0m" // blue
-            else -> msg
-        }
-        fprintf(stderr, "[DEBUG] %s\n", colored)
-        fflush(stderr)
+        val file = debugFile ?: return
+        fputs("${Clock.System.now()} $msg\n", file)
+        fflush(file)
     }
 
     override suspend fun disconnect() {

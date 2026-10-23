@@ -3,6 +3,7 @@ package com.cliwalker.tui
 import com.cliwalker.ble.ConnectionState
 import com.cliwalker.model.SessionRecord
 import com.cliwalker.model.WalkingSession
+import com.cliwalker.model.formatDuration
 import com.cliwalker.strava.formatThreshold
 import com.github.ajalt.mordant.animation.animation
 import com.github.ajalt.mordant.rendering.BorderType
@@ -101,7 +102,7 @@ private class GradientBorderWidget(private val inner: Widget) : Widget {
 private fun Widget.withGradientBorder(): Widget = GradientBorderWidget(this)
 
 private const val CONNECTION_STATE_WIDTH = 13 // len("Connecting...")
-private const val BELT_STATE_WIDTH = 11 // len("Starting...")
+private const val BELT_STATE_WIDTH = 13 // len("Unknown(0xff)")
 private const val THRESHOLD_WIDTH = 8 // len("12.34 km")
 private const val PENDING_WIDTH = 24 // len("Nothing waiting to upload") - 1
 
@@ -255,7 +256,7 @@ class Dashboard(
             }
             row {
                 cell(gray("Time"))
-                cell(blue(session.formattedTime))
+                cell(formatTime(session))
             }
             row {
                 cell(gray("Calories"))
@@ -451,7 +452,16 @@ class Dashboard(
         com.cliwalker.model.BeltState.Starting, com.cliwalker.model.BeltState.Accelerating -> yellow("Starting...".padEnd(BELT_STATE_WIDTH))
         com.cliwalker.model.BeltState.Standby -> yellow("Standby".padEnd(BELT_STATE_WIDTH))
         com.cliwalker.model.BeltState.Idle -> gray("Idle".padEnd(BELT_STATE_WIDTH))
+        com.cliwalker.model.BeltState.Unknown ->
+            magenta("Unknown(0x${session.rawState.toString(16).padStart(2, '0')})".padEnd(BELT_STATE_WIDTH))
     }.toString()
+
+    // Kept on the Time row rather than in a row of its own so the dashboard never changes height.
+    private fun formatTime(session: WalkingSession): String {
+        val time = blue(session.formattedTime)
+        val remaining = session.secondsUntilAutoStop ?: return time
+        return time + "  " + (bold + brightRed)("Pad auto-rests in ${formatDuration(remaining)}")
+    }
 
     private fun formatSpeed(session: WalkingSession): String {
         val bar = buildSpeedBar(session.speed, maxSpeed = 6.0, width = 20)

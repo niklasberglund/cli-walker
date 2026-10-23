@@ -86,7 +86,8 @@ object WalkingPadProtocol {
         val subType = data[1].toInt() and 0xFF
         if (subType != 0xA2) return null
 
-        val beltState = BeltState.fromByte(data[2].toInt() and 0xFF)
+        val rawState = data[2].toInt() and 0xFF
+        val beltState = BeltState.fromByte(rawState)
         val speed = (data[3].toInt() and 0xFF) / 10.0
         val mode = BeltMode.fromByte(data[4].toInt() and 0xFF)
         val time = read3ByteInt(data, 5)
@@ -96,6 +97,7 @@ object WalkingPadProtocol {
         return ParsedResponse.Status(
             session = WalkingSession(
                 state = beltState,
+                rawState = rawState,
                 mode = mode,
                 speed = speed,
                 distanceKm = distance / 100.0,

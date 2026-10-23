@@ -42,7 +42,7 @@ quicker.
 | ------------- | ----------------------------------------------- |
 | `--speed N`   | Starting speed in km/h (default 2.5)            |
 | `--no-strava` | Don't upload this run's sessions to Strava      |
-| `--debug`     | Log raw BLE packets                             |
+| `--debug`     | Log raw BLE packets to `~/.cli-walker/ble.log` |
 
 ### Keys
 

@@ -38,7 +38,7 @@ class CliWalker : CliktCommand(
         .double()
         .default(2.5)
 
-    private val debug by option("--debug", help = "Enable verbose BLE packet logging")
+    private val debug by option("--debug", help = "Log raw BLE packets to ~/.cli-walker/ble.log")
         .flag()
 
     private val noStrava by option("--no-strava", help = "Do not upload this session to Strava")

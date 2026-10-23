@@ -7,10 +7,13 @@ enum class BeltState(val value: Int) {
     Running(1),
     Starting(4),
     Standby(5),
-    Accelerating(9);
+    Accelerating(9),
+
+    // A state byte the protocol docs do not describe; WalkingSession.rawState keeps the value.
+    Unknown(-1);
 
     companion object {
-        fun fromByte(b: Int): BeltState = entries.find { it.value == b } ?: Idle
+        fun fromByte(b: Int): BeltState = entries.find { it.value == b } ?: Unknown
     }
 }
 
@@ -26,6 +29,7 @@ enum class BeltMode(val value: Int) {
 
 data class WalkingSession(
     val state: BeltState = BeltState.Idle,
+    val rawState: Int = state.value,
     val mode: BeltMode = BeltMode.Manual,
     val speed: Double = 0.0,         // km/h
     val distanceKm: Double = 0.0,
@@ -41,7 +45,19 @@ data class WalkingSession(
     val formattedDistance: String get() = "${roundTo2(distanceKm)} km"
 
     val caloriesEstimate: Int get() = caloriesFor(elapsedSeconds)
+
+    /** Seconds until the pad's run cap stops the belt, once the warning window has begun; else null. */
+    val secondsUntilAutoStop: Int?
+        get() {
+            val remaining = MAX_RUN_SECONDS - elapsedSeconds
+            return if (isActive && remaining <= AUTO_STOP_WARNING_SECONDS) remaining.coerceAtLeast(0) else null
+        }
 }
+
+// The A1 Pro stops the belt after two hours of continuous running and then locks itself in a
+// 30-minute REST countdown. None of this is visible over BLE, so the cap is tracked from elapsed time.
+const val MAX_RUN_SECONDS = 2 * 60 * 60
+const val AUTO_STOP_WARNING_SECONDS = 5 * 60
 
 fun formatDuration(seconds: Int): String {
     val h = seconds / 3600
