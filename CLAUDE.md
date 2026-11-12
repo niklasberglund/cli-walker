@@ -4,43 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CLI-Walker is a macOS command-line tool for logging walking sessions with a Kingsmith WalkingPad A1 Pro treadmill. It connects via Bluetooth Low Energy (BLE), reads real-time speed/distance/steps data, and displays a live TUI dashboard.
+CLI-Walker is a command-line tool for logging walking sessions with a Kingsmith WalkingPad A1 Pro treadmill. It connects via Bluetooth Low Energy (BLE), reads real-time speed/distance/steps data, displays a live TUI dashboard, and uploads sessions to Strava. It is written in Rust and runs on macOS and Linux; Windows builds and passes CI but is untested with the pad.
+
+It was ported from Kotlin/Native (macOS only) in the Linear project "CLI-Walker Rust migration". Files the Kotlin version wrote under `~/.cli-walker/` are read as-is: field names and timestamp formats match.
 
 ## Build Commands
 
 ```bash
-./gradlew compileKotlinMacosArm64    # Compile only (fast feedback)
-./gradlew macosArm64Binaries          # Build native executable
-./gradlew macosArm64Test              # Run tests
-./gradlew clean                       # Clean build artifacts
-```
-
-The built binary is at `build/bin/macosArm64/debugExecutable/cli-walker.kexe`.
-
-For x86 Macs, replace `macosArm64` with `macosX64` in all commands.
-
-### Rust port (in progress)
-
-The app is being rewritten in Rust (Linear project "CLI-Walker Rust migration"). The crate
-lives at the repo root (`Cargo.toml`, `src/main.rs`) next to the Kotlin sources, which stay
-as the reference until the port reaches parity. Unlike the Kotlin build, it builds on Linux.
-
-```bash
 cargo build
-cargo test
+cargo test                                  # unit, snapshot and pseudo-terminal tests
 cargo clippy --all-targets -- -D warnings
-cargo llvm-cov --summary-only         # Coverage (needs cargo-llvm-cov)
+cargo fmt
+cargo llvm-cov --summary-only               # coverage (needs cargo-llvm-cov)
 ```
-
-Dashboard tests come in two kinds. Snapshot tests render into ratatui's `TestBackend` and
-compare with insta snapshots in `src/snapshots/` (accept changes with `cargo insta review`, or
-`INSTA_UPDATE=always cargo test`, then read the diff). `tests/tui_pty.rs` runs the real binary
-in a pseudo-terminal, answers its cursor-position query like a real terminal, sends keys and
-checks the screen; it is Unix only.
 
 On Linux, btleplug needs `libdbus-1-dev` and `pkg-config` to build. CI
 (`.github/workflows/rust.yml`) runs fmt, clippy and tests on Linux, macOS and Windows, plus
-coverage on Linux.
+coverage on Linux. The Linux test job also validates generated TCX against Garmin's schema
+(set `TCX_XSD` to the `.xsd` path, with `xmllint` installed, to do the same locally).
+
+## Tests
+
+- **Snapshot tests** render each dashboard tab into ratatui's `TestBackend` and compare with
+  insta snapshots in `src/tui/snapshots/`. They record text only; colours have their own
+  assertions. Accept intended changes with `cargo insta review` (or
+  `INSTA_UPDATE=always cargo test`), then read the diff.
+- **`tests/tui_pty.rs`** runs the real binary in a pseudo-terminal in `--demo` mode, presses
+  keys, resizes, and checks the screen and the terminal state on exit. Unix only.
+- **Never let a test reach the real pad.** The app starts the belt as soon as it connects, so
+  a test that found the pad would run the treadmill unattended. Every pseudo-terminal session
+  sets `CLI_WALKER_NO_HARDWARE=1`, which makes the app refuse the BLE path, and passes
+  `--demo`. Keep both when adding tests.
+- Strava flows are tested against a wiremock server (`src/strava/tests.rs`).
 
 ## Running
 
@@ -48,34 +43,46 @@ coverage on Linux.
 ./run.sh                  # Build and run the walking dashboard
 ./run.sh strava login     # Authorize against Strava
 ./run.sh strava sync      # Upload past sessions
-./run.sh --demo           # Simulated pad + sample history in a temp HOME (hidden flag)
+./run.sh --demo           # Simulated pad + sample history in a temp data dir (hidden flag)
 ```
 
-`docs/demo.gif` is recorded from demo mode with VHS: `vhs demo/demo.tape` after building.
+`docs/demo.gif` is recorded from demo mode with VHS: `cargo build && vhs demo/demo.tape`.
 
-The app is an interactive TUI (raw keyboard input, live dashboard), so it must be run as a direct child of the terminal — `./run.sh` builds via Gradle and then `exec`s the binary. A Gradle `Exec` task pipes stdio and breaks the TUI, so there is deliberately no Gradle `run` task.
+The dashboard is an interactive TUI (raw keyboard input, alternate screen), so `./run.sh`
+builds and then `exec`s the binary rather than running it as a child of Cargo.
 
 ## Tech Stack
 
-- **Language**: Kotlin/Native (macOS target, not JVM)
-- **BLE**: [Kable](https://github.com/JuulLabs/kable) — Kotlin coroutines-powered BLE
-- **TUI**: [Mordant](https://github.com/ajalt/mordant) — terminal styling, tables, animations
-- **CLI**: [Clikt](https://github.com/ajalt/clikt) — command-line argument parsing
-- **Build**: Gradle with Kotlin Multiplatform plugin
+- **Async**: tokio; pad state flows through `tokio::sync::watch` channels
+- **BLE**: [btleplug](https://github.com/deviceplug/btleplug) (CoreBluetooth, BlueZ over D-Bus, WinRT)
+- **TUI**: [ratatui](https://ratatui.rs) + crossterm, full screen on the alternate screen
+- **CLI**: clap (derive)
+- **HTTP**: reqwest with rustls
+- **Time**: jiff
 
-Since this is Kotlin/Native, not JVM: `String.format()` is unavailable, JVM-specific APIs don't exist, and some libraries behave differently than on JVM.
+crossterm is built with `use-dev-tty`. Its default edge-triggered reader drops a key that
+arrives together with a resize until the next key comes in; the poll-based reader does not.
+`redraws_after_a_resize_and_keeps_keys_pressed_with_it` covers this.
 
 ## Architecture
 
-The app has these layers:
+1. **BLE Protocol** (`protocol.rs`) — Stateless encoder/decoder. Command packets are
+   `[0xF7, 0xA2, type, param, checksum, 0xFD]` with checksum = sum of the bytes between header
+   and checksum, mod 256.
 
-1. **BLE Protocol** (`ble/WalkingPadProtocol.kt`) — Stateless encoder/decoder for the WalkingPad BLE protocol. Builds command packets (query status, start, stop, set speed) and parses status responses. All packets follow the format `[0xF7, 0xA2, cmd, param, 0xFF, checksum, 0xFD]` with checksum = `sum(bytes[1..n-2]) % 256`.
+2. **Pad** (`pad/`) — `PadHandle` is how the app drives a treadmill: `watch` receivers for the
+   latest `WalkingSession` and `ConnectionState`, and a command queue. Each pad runs as its own
+   task. `pad/ble.rs` scans for the pad **by service UUID** (the A1 Pro advertises as
+   `KS-ST-A1P`, not "WalkingPad"), connects, starts the belt, subscribes to `fe01` and polls
+   status via writes to `fe02`, throttling commands to one per 700 ms. On quit it stops the
+   belt only if it is moving (the pad *starts* the belt when sent a stop while idle).
+   `pad/demo.rs` is the simulated pad and seeds demo mode's throwaway data directory.
 
-2. **BLE Connection** (`ble/WalkingPadConnection.kt`) — Manages the Kable peripheral lifecycle: scanning for a device named "WalkingPad", connecting, subscribing to notifications on `fe01`, and polling status via writes to `fe02`. Exposes `StateFlow<WalkingSession>` and `StateFlow<ConnectionState>`.
+3. **Data Model** (`model.rs`) — `WalkingSession` (one status sample) and `SessionRecord` (a
+   finished walk, one JSON line in `sessions.jsonl`), plus formatting helpers and a rough
+   calorie estimate. `model::instant` formats timestamps exactly like kotlinx-datetime.
 
-3. **Data Model** (`model/WalkingSession.kt`) — Immutable data class holding session state (speed, distance, steps, time, belt state/mode). Includes formatting helpers and a rough calorie estimate.
-
-4. **Session Tracking** (`model/SessionTracker.kt`) — Turns the pad's status samples into
+4. **Session Tracking** (`tracker.rs`) — Turns the pad's status samples into
    discrete `SessionRecord`s. The pad zeroes its counters whenever the belt stops, so each
    belt run is seen as a fresh climb from zero; the tracker banks the highest-elapsed sample
    of each run and sums them. Runs separated by less than the coalesce window (1 minute) fold
@@ -83,16 +90,25 @@ The app has these layers:
    a walk into fragments that each fall below the Strava upload threshold. A longer gap closes
    the record and starts a new one, so one app run can produce several sessions.
 
-5. **TUI Dashboard** (`tui/Dashboard.kt`) — Mordant `textAnimation` that renders a table with live metrics. Collects from the connection's StateFlows and re-renders on each update. Includes a color-coded speed bar. Three tabs (Session, Statistics, Strava); the Strava tab shows auth status, feed muting, and the upload threshold, and edits the latter two in place via `StravaUiState`. Every tab is padded to the same width so switching never resizes the box.
+5. **Storage** (`store.rs`) — `DataDir` is `~/.cli-walker` (or demo mode's temp directory) and
+   is passed to every store explicitly; nothing reads `HOME` behind the scenes.
 
-6. **Strava Upload** (`strava/`) — OAuth 2.0 authorization-code flow plus activity
-   creation. `LoopbackServer.kt` is a one-shot HTTP listener on 127.0.0.1 that catches the
-   OAuth redirect (Strava has no device-code flow); `StravaApi.kt` wraps the token and
-   activity endpoints over Ktor's Darwin engine; `StravaService.kt` ties them together;
-   `StravaConfig.kt` and `UploadLog.kt` persist credentials and uploaded-session ids under
-   `~/.cli-walker/`. Commands live in `StravaCommands.kt`.
+6. **TUI** (`tui/`) — `dashboard.rs` draws the logo and a card (tab bar, rows separated by
+   gradient rules, key hints) as a pure function of `View`. Three tabs: Session, Statistics,
+   Strava; the Strava tab edits the upload threshold and feed muting in place. Every tab is
+   `CARD_WIDTH` wide so switching never resizes the box. `tui/mod.rs` runs the event loop and
+   maps actions (`keys.rs`) to pad commands and settings.
 
-7. **Entry Point** (`Main.kt`) — Clikt command that wires everything together. Launches the dashboard coroutine, connects BLE, feeds status samples to the `SessionTracker`, and persists each session as it closes. On exit it prints a summary of every session recorded during the run and uploads them.
+7. **Strava Upload** (`strava/`) — OAuth 2.0 authorization-code flow plus TCX uploads.
+   `loopback.rs` is a one-shot HTTP listener on 127.0.0.1 that catches the OAuth redirect
+   (Strava has no device-code flow); `api.rs` wraps the token and upload endpoints;
+   `mod.rs` (`StravaService`) ties them together; `config.rs` and `upload_log.rs` persist
+   credentials and uploaded-session ids. Commands live in `commands.rs`.
+
+8. **Entry Point** (`main.rs`, `walk.rs`) — clap parses the command line. `walk.rs` runs the
+   dashboard, feeds status samples to the `SessionTracker`, and persists each session as it
+   closes. On exit it prints a summary of every session recorded during the run and uploads
+   them. `paint.rs` styles plain output and drops escape codes when stdout is not a terminal.
 
 ## WalkingPad BLE Protocol Reference
 
@@ -111,7 +127,7 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
 - Scope requested: `activity:write,activity:read_all`. The write scope alone is not enough:
   `PUT /activities/{id}` answers **404 Record Not Found** when the token cannot read the
   activity, and `activity:read` cannot see private ("Only You") activities.
-- Access tokens last ~6 hours; `StravaApi.validAccessToken` refreshes on demand. Strava
+- Access tokens last ~6 hours; `StravaApi::valid_access_token` refreshes on demand. Strava
   rotates refresh tokens, so whatever the refresh returns is persisted, not just the access
   token.
 - Sessions are uploaded as TCX files (`POST /uploads`), not created as manual activities.
@@ -119,7 +135,7 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
   asynchronous: poll `GET /uploads/{id}` until it yields an `activity_id`.
 - TCX has no Walk sport (only Running/Biking/Other), so every upload needs a follow-up
   `PUT /activities/{id}` setting `sport_type=Walk`. Muting folds into that same call.
-- The pad reports only totals, so `TcxWriter.kt` synthesises trackpoints every 30s with
+- The pad reports only totals, so `strava/tcx.rs` synthesises trackpoints every 30s with
   linearly interpolated distance. Strava turns these into distance/velocity streams.
 - Strava does not take `device_name` from a TCX `<Creator>` block — verified with a
   schema-valid file, so this is not a malformed-XML problem. Neither the upload nor the
@@ -130,9 +146,12 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
   (HealthFit and friends) are stricter than Strava.
 - **Anything that fails after Strava has accepted an activity is a warning, not an error.**
   The activity exists; reporting failure would re-upload it as a duplicate. This applies to
-  the empty-body create bug, to processing timeouts, and to the `sport_type` update.
+  processing timeouts, to losing contact with Strava while polling the upload, to the
+  `sport_type` update, and to failing to write the upload log. A rejection reported by
+  Strava while processing (`error` on the upload) is still a failure, so it can be retried.
 - `~/.cli-walker/strava-uploads.json` maps session start times to Strava activity ids so
-  sessions are never uploaded twice, storing `0` for "uploaded, id unknown". It is kept
+  sessions are never uploaded twice, storing `0` for "uploaded, id unknown". Keys are
+  compared as parsed instants, not strings. It is kept
   separate from the append-only `sessions.jsonl` so uploading never rewrites the session log.
 - Finished sessions upload automatically when connected — one upload per session closed by
   the `SessionTracker`, so several start/stop cycles in one app run can yield several
@@ -143,7 +162,7 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
   account default.
 - A minimum upload distance (`minUploadDistanceKm` in `strava.json`) filters out short
   sessions. It is settable both from the CLI (`strava threshold 500m|1.5km|off`) and from the
-  dashboard's Strava tab (up/down = ±100 m, Ctrl+up/down = ±10 m). `StravaService.pending`
+  dashboard's Strava tab (up/down = ±100 m, Ctrl+up/down = ±10 m). `StravaService::pending`
   and `upload` both honour it, so the pending count matches what a sync would send;
   `strava sync --all` ignores it. A session skipped this way is reported on exit.
 - `strava mute on` sets `hide_from_home` on each upload via a follow-up `PUT`, since the
