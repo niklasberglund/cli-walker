@@ -19,6 +19,29 @@ The built binary is at `build/bin/macosArm64/debugExecutable/cli-walker.kexe`.
 
 For x86 Macs, replace `macosArm64` with `macosX64` in all commands.
 
+### Rust port (in progress)
+
+The app is being rewritten in Rust (Linear project "CLI-Walker Rust migration"). The crate
+lives at the repo root (`Cargo.toml`, `src/main.rs`) next to the Kotlin sources, which stay
+as the reference until the port reaches parity. Unlike the Kotlin build, it builds on Linux.
+
+```bash
+cargo build
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo llvm-cov --summary-only         # Coverage (needs cargo-llvm-cov)
+```
+
+Dashboard tests come in two kinds. Snapshot tests render into ratatui's `TestBackend` and
+compare with insta snapshots in `src/snapshots/` (accept changes with `cargo insta review`, or
+`INSTA_UPDATE=always cargo test`, then read the diff). `tests/tui_pty.rs` runs the real binary
+in a pseudo-terminal, answers its cursor-position query like a real terminal, sends keys and
+checks the screen; it is Unix only.
+
+On Linux, btleplug needs `libdbus-1-dev` and `pkg-config` to build. CI
+(`.github/workflows/rust.yml`) runs fmt, clippy and tests on Linux, macOS and Windows, plus
+coverage on Linux.
+
 ## Running
 
 ```bash

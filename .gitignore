@@ -5,3 +5,6 @@ build/
 *.hprof
 *.log
 .claude/settings.local.json
+
+# Rust
+/target/
