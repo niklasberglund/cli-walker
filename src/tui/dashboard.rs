@@ -111,7 +111,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         width: CARD_WIDTH.min(area.width),
         height: area.height.saturating_sub(CARD_TOP),
     };
-    draw_card(buf, card, &[tab_bar(view.tab), title], &rows, footer);
+    draw_card(buf, card, &[tab_bar(view.tab), title], &rows, &footer);
 }
 
 fn tab_bar(active: Tab) -> Line<'static> {
@@ -218,6 +218,15 @@ fn time_line(s: &WalkingSession) -> Line<'static> {
     Line::from(spans)
 }
 
+/// A personal best: a star, the value in its colour, and a gray detail after it.
+fn starred(value: String, color: Color, detail: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("★ ", Style::new().fg(Color::Yellow)),
+        Span::styled(value, Style::new().fg(color)),
+        Span::styled(format!("  {detail}"), Style::new().fg(GRAY)),
+    ])
+}
+
 fn statistics_tab(view: &View) -> (Line<'static>, Vec<Row>, Line<'static>) {
     let history = view.history;
     let mut rows = Vec::new();
@@ -254,54 +263,37 @@ fn statistics_tab(view: &View) -> (Line<'static>, Vec<Row>, Line<'static>) {
         let top_speed = best(|r| r.max_speed_kmh);
         let most_steps = best(|r| f64::from(r.steps));
         let date = |r: &SessionRecord| format_date(r.started_at, view.tz);
-        let star = || Span::styled("★ ", Style::new().fg(Color::Yellow));
-
         rows.push(pair(
             "Best distance",
-            Line::from(vec![
-                star(),
-                Span::styled(
-                    format!("{} km", truncate_2(longest.distance_km)),
-                    Style::new().fg(Color::Green),
-                ),
-                Span::styled(format!("  {}", date(longest)), Style::new().fg(GRAY)),
-            ]),
+            starred(
+                format!("{} km", truncate_2(longest.distance_km)),
+                Color::Green,
+                &date(longest),
+            ),
         ));
         rows.push(pair(
             "Best duration",
-            Line::from(vec![
-                star(),
-                Span::styled(
-                    format_duration(longest_time.duration_seconds),
-                    Style::new().fg(Color::Blue),
-                ),
-                Span::styled(format!("  {}", date(longest_time)), Style::new().fg(GRAY)),
-            ]),
+            starred(
+                format_duration(longest_time.duration_seconds),
+                Color::Blue,
+                &date(longest_time),
+            ),
         ));
         rows.push(pair(
             "Top speed",
-            Line::from(vec![
-                star(),
-                Span::styled(
-                    format!("{} km/h", truncate_1(top_speed.max_speed_kmh)),
-                    Style::new().fg(Color::Cyan),
-                ),
-                Span::styled(
-                    format!("  avg {} km/h", truncate_1(fastest_avg.avg_speed_kmh)),
-                    Style::new().fg(GRAY),
-                ),
-            ]),
+            starred(
+                format!("{} km/h", truncate_1(top_speed.max_speed_kmh)),
+                Color::Cyan,
+                &format!("avg {} km/h", truncate_1(fastest_avg.avg_speed_kmh)),
+            ),
         ));
         rows.push(pair(
             "Most steps",
-            Line::from(vec![
-                star(),
-                Span::styled(
-                    most_steps.steps.to_string(),
-                    Style::new().fg(Color::Magenta),
-                ),
-                Span::styled(format!("  {}", date(most_steps)), Style::new().fg(GRAY)),
-            ]),
+            starred(
+                most_steps.steps.to_string(),
+                Color::Magenta,
+                &date(most_steps),
+            ),
         ));
 
         rows.push(Row::Full(heading("Recent Sessions")));
@@ -438,7 +430,7 @@ fn format_date(at: Timestamp, tz: &TimeZone) -> String {
 
 /// Header box, rows separated by rules, footer box. Borders and rules carry the logo's
 /// gradient from left to right.
-fn draw_card(buf: &mut Buffer, card: Rect, header: &[Line], rows: &[Row], footer: Line) {
+fn draw_card(buf: &mut Buffer, card: Rect, header: &[Line], rows: &[Row], footer: &Line) {
     let width = card.width;
     if width < 4 {
         return;
@@ -480,7 +472,7 @@ fn draw_card(buf: &mut Buffer, card: Rect, header: &[Line], rows: &[Row], footer
     }
 
     border_row(buf, card, y, '╭', '─', '╮');
-    boxed_row(buf, card, y + 1, &footer);
+    boxed_row(buf, card, y + 1, footer);
     border_row(buf, card, y + 2, '╰', '─', '╯');
 }
 

@@ -38,7 +38,7 @@ impl LoopbackServer {
     }
 
     pub fn port(&self) -> u16 {
-        self.listener.local_addr().map(|a| a.port()).unwrap_or(0)
+        self.listener.local_addr().map_or(0, |a| a.port())
     }
 
     pub async fn await_redirect(self, wait: Duration) -> RedirectResult {
@@ -125,18 +125,15 @@ fn url_decode(value: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'%' if i + 2 < bytes.len() => {
-                match std::str::from_utf8(&bytes[i + 1..i + 3])
+                if let Some(b) = std::str::from_utf8(&bytes[i + 1..i + 3])
                     .ok()
                     .and_then(|h| u8::from_str_radix(h, 16).ok())
                 {
-                    Some(b) => {
-                        out.push(b);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(b'%');
-                        i += 1;
-                    }
+                    out.push(b);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
                 }
             }
             b'+' => {

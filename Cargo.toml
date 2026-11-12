@@ -47,3 +47,14 @@ dist = true
 # Fail the build on a dependency nothing uses. Cargo skips crates that are also pulled in
 # by another dependency, and never checks [dev-dependencies].
 unused_dependencies = "deny"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Numeric casts here are deliberate (km/h to protocol tenths, colour maths, display rounding);
+# flagging each one adds noise without catching anything.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"

@@ -25,8 +25,8 @@ impl Fixture {
         }
     }
 
-    fn login(&self, config: StravaConfig) {
-        StravaConfigStore::new(&self.dir).save(&config).unwrap();
+    fn login(&self, config: &StravaConfig) {
+        StravaConfigStore::new(&self.dir).save(config).unwrap();
     }
 
     fn service(&self) -> StravaService {
@@ -98,7 +98,7 @@ fn processed(upload_id: i64, activity_id: i64) -> Mock {
 #[tokio::test]
 async fn uploads_a_session_and_marks_it_as_a_walk() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(
         upload_request()
             .and(body_string_contains("name=\"data_type\"\r\n\r\ntcx"))
@@ -139,7 +139,7 @@ async fn uploads_a_session_and_marks_it_as_a_walk() {
 #[tokio::test]
 async fn mutes_the_activity_in_the_same_update() {
     let f = Fixture::new().await;
-    f.login(StravaConfig {
+    f.login(&StravaConfig {
         hide_from_feed: true,
         ..connected()
     });
@@ -165,7 +165,7 @@ async fn mutes_the_activity_in_the_same_update() {
 #[tokio::test]
 async fn a_failed_update_is_a_warning_not_a_failure() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(accepts_upload(7)).await;
     f.mock(processed(7, 99)).await;
     f.mock(
@@ -198,7 +198,7 @@ async fn a_failed_update_is_a_warning_not_a_failure() {
 #[tokio::test]
 async fn slow_processing_still_counts_as_uploaded() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(accepts_upload(7)).await;
     f.mock(
         Mock::given(method("GET"))
@@ -223,7 +223,7 @@ async fn slow_processing_still_counts_as_uploaded() {
 #[tokio::test]
 async fn losing_strava_after_acceptance_is_a_warning() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(accepts_upload(7)).await;
     f.mock(
         Mock::given(method("GET"))
@@ -248,7 +248,7 @@ async fn losing_strava_after_acceptance_is_a_warning() {
 #[tokio::test]
 async fn a_processing_rejection_is_a_failure_and_can_be_retried() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(accepts_upload(7)).await;
     f.mock(
         Mock::given(method("GET"))
@@ -269,7 +269,7 @@ async fn a_processing_rejection_is_a_failure_and_can_be_retried() {
 #[tokio::test]
 async fn refreshes_an_expired_token_and_keeps_the_rotated_refresh_token() {
     let f = Fixture::new().await;
-    f.login(StravaConfig {
+    f.login(&StravaConfig {
         access_token: Some("stale".into()),
         expires_at: 0,
         ..connected()
@@ -306,7 +306,7 @@ async fn refreshes_an_expired_token_and_keeps_the_rotated_refresh_token() {
 #[tokio::test]
 async fn an_unauthorized_upload_suggests_logging_in_again() {
     let f = Fixture::new().await;
-    f.login(connected());
+    f.login(&connected());
     f.mock(
         Mock::given(method("POST"))
             .and(path("/api/v3/uploads"))
@@ -327,7 +327,7 @@ async fn an_unauthorized_upload_suggests_logging_in_again() {
 #[tokio::test]
 async fn threshold_filters_uploads_and_pending() {
     let f = Fixture::new().await;
-    f.login(StravaConfig {
+    f.login(&StravaConfig {
         min_upload_distance_km: 1.0,
         ..connected()
     });
@@ -339,7 +339,7 @@ async fn threshold_filters_uploads_and_pending() {
             threshold_km: 1.0
         }
     );
-    assert!(service.pending(&[record(0.5)], false).is_empty());
+    assert_eq!(service.pending(&[record(0.5)], false), []);
     assert_eq!(service.pending(&[record(0.5)], true).len(), 1);
 
     assert!(service.set_min_upload_distance_km(-3.0).unwrap());
@@ -370,7 +370,7 @@ fn browser_redirects_to(port: u16, query: &'static str) {
 async fn logs_in_through_the_loopback_redirect() {
     let f = Fixture::new().await;
     // Settings from an earlier login survive re-authorizing.
-    f.login(StravaConfig {
+    f.login(&StravaConfig {
         hide_from_feed: true,
         min_upload_distance_km: 0.7,
         ..connected()
@@ -447,10 +447,10 @@ async fn login_fails_when_a_scope_was_unticked() {
             |_, port| browser_redirects_to(port, "code=c&scope=read,activity:write"),
         )
         .await;
-    match result {
-        LoginResult::Failure(reason) => assert!(reason.contains("activity:read_all"), "{reason}"),
-        other => panic!("{other:?}"),
-    }
+    assert!(
+        matches!(&result, LoginResult::Failure(reason) if reason.contains("activity:read_all")),
+        "{result:?}"
+    );
 }
 
 #[test]

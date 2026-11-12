@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn rounds_half_up() {
         assert_eq!(fixed(37.45, 1), "37.5");
-        assert_eq!(fixed(1.3333333, 3), "1.333");
+        assert_eq!(fixed(1.333_333_3, 3), "1.333");
         assert_eq!(fixed(2.0, 0), "2");
     }
 

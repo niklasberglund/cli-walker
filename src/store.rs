@@ -127,7 +127,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = DataDir::new(tmp.path().join("nested"));
         let store = dir.sessions();
-        assert!(store.load().is_empty());
+        assert_eq!(store.load(), []);
 
         store.append(&record(1_700_000_000)).unwrap();
         store.append(&record(1_700_100_000)).unwrap();

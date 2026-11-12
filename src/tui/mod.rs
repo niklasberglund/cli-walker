@@ -20,6 +20,7 @@ use crate::model::SessionRecord;
 use crate::pad::{MAX_SPEED_KMH, MIN_SPEED_KMH, PadHandle};
 use crate::store::SessionStore;
 use crate::strava::StravaService;
+use crate::strava::config::StravaConfig;
 use crate::tracker::SessionTracker;
 
 const REDRAW_INTERVAL: Duration = Duration::from_millis(500);
@@ -142,7 +143,7 @@ pub fn strava_ui_state(service: &StravaService, history: &[SessionRecord]) -> St
     let config = service.config();
     let pending = service.pending(history, false).len();
     StravaUiState {
-        connected: config.as_ref().is_some_and(|c| c.is_authorized()),
+        connected: config.as_ref().is_some_and(StravaConfig::is_authorized),
         athlete_name: config.as_ref().and_then(|c| c.athlete_name.clone()),
         muted: config.as_ref().is_some_and(|c| c.hide_from_feed),
         threshold_km: config.as_ref().map_or(0.0, |c| c.min_upload_distance_km),
@@ -263,7 +264,10 @@ mod tests {
         let (handle, mut pad) = pad::channels();
 
         app.apply(Action::ToggleBelt, &handle);
-        assert!(matches!(pad.commands.try_recv(), Ok(PadCommand::StartBelt(s)) if s == 2.5));
+        assert!(matches!(
+            pad.commands.try_recv(),
+            Ok(PadCommand::StartBelt(2.5))
+        ));
 
         pad.session
             .send_modify(|s| s.state = crate::model::BeltState::Running);

@@ -125,8 +125,14 @@ mod tests {
         let (handle, mut pad) = channels();
         handle.set_speed(9.0);
         handle.set_speed(0.1);
-        assert!(matches!(pad.commands.recv().await, Some(PadCommand::SetSpeed(s)) if s == 6.0));
-        assert!(matches!(pad.commands.recv().await, Some(PadCommand::SetSpeed(s)) if s == 0.5));
+        assert!(matches!(
+            pad.commands.recv().await,
+            Some(PadCommand::SetSpeed(6.0))
+        ));
+        assert!(matches!(
+            pad.commands.recv().await,
+            Some(PadCommand::SetSpeed(0.5))
+        ));
     }
 
     #[tokio::test]

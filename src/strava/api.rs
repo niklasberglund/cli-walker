@@ -325,6 +325,10 @@ fn describe(record: &SessionRecord) -> String {
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "taken by value so it can be passed as `map_err(network)`"
+)]
 fn network(e: reqwest::Error) -> StravaError {
     StravaError(format!("could not reach Strava: {e}"))
 }

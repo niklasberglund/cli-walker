@@ -2,7 +2,7 @@
 //!
 //! The client secret is not really a secret in a distributed CLI: Strava's token endpoint
 //! requires it, and there is no PKCE-style flow that avoids it. Each user registers their own
-//! API application at https://www.strava.com/settings/api.
+//! API application at <https://www.strava.com/settings/api>.
 
 use std::fs;
 use std::path::PathBuf;

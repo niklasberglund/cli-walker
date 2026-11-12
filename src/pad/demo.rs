@@ -148,7 +148,7 @@ pub fn sample_history(now: Timestamp) -> Vec<SessionRecord> {
                 return None;
             }
             let offset = SignedDuration::from_hours(days_ago * 24 + 3)
-                + SignedDuration::from_mins(random.below(120) as i64);
+                + SignedDuration::from_mins(random.below(120).cast_signed());
             let start = now - offset;
             let avg_speed = 3.0 + random.below(16) as f64 / 10.0;
             let seconds = (20 + random.below(55)) as u32 * 60 + random.below(60) as u32;
@@ -230,7 +230,7 @@ mod tests {
         pad.start_belt(2.0);
         let restarted = pad
             .session
-            .wait_for(|s| s.is_active())
+            .wait_for(WalkingSession::is_active)
             .await
             .unwrap()
             .clone();

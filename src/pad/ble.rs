@@ -77,7 +77,7 @@ async fn run(mut pad: PadChannels, mut log: DebugLog, start_speed: f64) {
     let mut link = Link {
         peripheral,
         write,
-        last_command: Instant::now() - MIN_COMMAND_INTERVAL,
+        last_command: None,
         log,
     };
     link.start_belt(start_speed).await;
@@ -164,11 +164,11 @@ async fn find_pad(adapter: &Adapter) -> Result<Peripheral> {
         }
     }
     while let Some(event) = events.next().await {
-        let id = match event {
-            CentralEvent::DeviceDiscovered(id)
-            | CentralEvent::DeviceUpdated(id)
-            | CentralEvent::ServicesAdvertisement { id, .. } => id,
-            _ => continue,
+        let (CentralEvent::DeviceDiscovered(id)
+        | CentralEvent::DeviceUpdated(id)
+        | CentralEvent::ServicesAdvertisement { id, .. }) = event
+        else {
+            continue;
         };
         if let Ok(peripheral) = adapter.peripheral(&id).await
             && advertises_pad_service(&peripheral).await
@@ -189,7 +189,8 @@ async fn advertises_pad_service(peripheral: &Peripheral) -> bool {
 struct Link {
     peripheral: Peripheral,
     write: Characteristic,
-    last_command: Instant,
+    /// When the last command went out; `None` until the first one has.
+    last_command: Option<Instant>,
     log: DebugLog,
 }
 
@@ -284,9 +285,11 @@ impl Link {
             return;
         }
         if throttle {
-            let elapsed = self.last_command.elapsed();
-            if elapsed < MIN_COMMAND_INTERVAL {
-                sleep(MIN_COMMAND_INTERVAL - elapsed).await;
+            let wait = self.last_command.map_or(Duration::ZERO, |last| {
+                MIN_COMMAND_INTERVAL.saturating_sub(last.elapsed())
+            });
+            if !wait.is_zero() {
+                sleep(wait).await;
             }
         }
         self.log.line(&format!("TX: {}", protocol::to_hex(data)));
@@ -295,7 +298,7 @@ impl Link {
             .write(&self.write, data, WriteType::WithoutResponse)
             .await
         {
-            Ok(()) => self.last_command = Instant::now(),
+            Ok(()) => self.last_command = Some(Instant::now()),
             Err(e) => self.log.line(&format!("TX FAILED: {e}")),
         }
     }

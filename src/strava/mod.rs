@@ -213,7 +213,7 @@ impl StravaService {
         if self.upload_log.is_uploaded(record) {
             return UploadResult::AlreadyUploaded;
         }
-        let Some(config) = self.store.load().filter(|c| c.is_authorized()) else {
+        let Some(config) = self.store.load().filter(StravaConfig::is_authorized) else {
             return UploadResult::NotConnected;
         };
         if !ignore_threshold && record.distance_km < config.min_upload_distance_km {

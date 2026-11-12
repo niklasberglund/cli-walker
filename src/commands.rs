@@ -9,6 +9,7 @@ use jiff::tz::TimeZone;
 
 use crate::model::SessionRecord;
 use crate::store::DataDir;
+use crate::strava::config::StravaConfig;
 use crate::strava::{
     DEFAULT_CALLBACK_PORT, LoginOptions, LoginResult, StravaService, UploadResult, activity_name,
     format_threshold, parse_threshold, tcx,
@@ -169,9 +170,7 @@ async fn login(
     println!();
     match result {
         LoginResult::Success { athlete_name } => {
-            let who = athlete_name
-                .map(|n| format!(" as {}", n.bold()))
-                .unwrap_or_default();
+            let who = athlete_name.map_or_default(|n| format!(" as {}", n.bold()));
             println!("{}", format!("Connected to Strava{who}.").green());
             println!(
                 "Finished sessions will upload automatically. Run {} to send past ones.",
@@ -197,7 +196,7 @@ fn prompt(label: &str) -> Result<String> {
 }
 
 fn status(service: &StravaService, dir: &DataDir) {
-    let Some(config) = service.config().filter(|c| c.is_authorized()) else {
+    let Some(config) = service.config().filter(StravaConfig::is_authorized) else {
         println!("{}", "Not connected to Strava.".yellow());
         println!("Run {} to connect.", "cli-walker strava login".bold());
         return;
