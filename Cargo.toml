@@ -5,7 +5,6 @@ edition = "2024"
 description = "Terminal dashboard and session logger for the Kingsmith WalkingPad A1 Pro"
 license = "MIT"
 repository = "https://github.com/niklasberglund/cli-walker"
-homepage = "https://github.com/niklasberglund/cli-walker"
 publish = false
 
 [dependencies]
