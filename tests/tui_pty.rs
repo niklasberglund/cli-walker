@@ -77,7 +77,7 @@ impl Session {
                 self.raw.extend_from_slice(&chunk);
                 self.screen.process(&chunk);
                 // Search from a little before the new chunk in case a request was split.
-                let from = before.saturating_sub(CURSOR_POSITION_REQUEST.len());
+                let from = before.saturating_sub(CURSOR_POSITION_REQUEST.len() - 1);
                 let requests = count(&self.raw[from..], CURSOR_POSITION_REQUEST);
                 for _ in 0..requests {
                     let (row, col) = self.screen.screen().cursor_position();
