@@ -47,6 +47,9 @@ coverage on Linux. The Linux test job also validates generated TCX against Garmi
 ```
 
 `docs/demo.gif` is recorded from demo mode with VHS: `cargo build && vhs demo/demo.tape`.
+On Ubuntu 24.04 and later, VHS's downloaded Chromium (`~/.cache/rod/browser/chromium-*/chrome`)
+needs an AppArmor profile that allows `userns`, or it cannot create its sandbox and VHS fails
+with "browser exited unexpectedly". Give it a profile rather than disabling the sandbox.
 
 The dashboard is an interactive TUI (raw keyboard input, alternate screen), so `./run.sh`
 builds and then `exec`s the binary rather than running it as a child of Cargo.

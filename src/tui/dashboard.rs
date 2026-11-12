@@ -457,7 +457,8 @@ fn draw_card(buf: &mut Buffer, card: Rect, header: &[Line], rows: &[Row], footer
 
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
-            border_row(buf, card, y, '─', '─', '─');
+            // Half-line ends start and stop where the boxes' rounded corners do.
+            border_row(buf, card, y, '╶', '─', '╴');
             y += 1;
         }
         let x = card.x + 2;
