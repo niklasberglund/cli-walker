@@ -33,9 +33,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install BlueZ D-Bus headers
+      - name: Install BlueZ D-Bus headers and xmllint
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libxml2-utils
+      - name: Fetch the TCX schema
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/TrainingCenterDatabasev2.xsd" \
+            https://www8.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd
+          echo "TCX_XSD=$RUNNER_TEMP/TrainingCenterDatabasev2.xsd" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

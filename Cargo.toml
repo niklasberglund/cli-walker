@@ -5,30 +5,41 @@ edition = "2024"
 description = "Terminal dashboard and session logger for the Kingsmith WalkingPad A1 Pro"
 license = "MIT"
 repository = "https://github.com/niklasberglund/cli-walker"
+homepage = "https://github.com/niklasberglund/cli-walker"
 publish = false
 
 [dependencies]
 anyhow = "1.0.104"
 btleplug = "0.13.5"
-clap = { version = "4.6.7", features = ["derive"] }
-crossterm = "0.29.0"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+crossterm = { version = "0.29.0", features = ["event-stream", "use-dev-tty"] }
 directories = "6.0.0"
 futures = "0.3.34"
-jiff = "0.2.43"
-quick-xml = "0.42.0"
+jiff = { version = "0.2.43", features = ["serde"] }
 ratatui = "0.30.2"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "multipart"] }
+rpassword = "7.5.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
-tracing = "0.1.44"
-tracing-appender = "0.2.5"
 uuid = "1.29.2"
 webbrowser = "1.2.7"
 
 [dev-dependencies]
 insta = "1.49.0"
 portable-pty = "0.9.0"
+quick-xml = "0.42.0"
+tokio = { version = "1.54.1", features = ["test-util"] }
 vt100 = "0.18.1"
 wiremock = "0.6.5"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[package.metadata.dist]
+# `publish = false` keeps this off crates.io; release binaries are still wanted.
+dist = true

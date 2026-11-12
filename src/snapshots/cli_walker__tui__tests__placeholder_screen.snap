@@ -1,9 +1,0 @@
----
-source: src/tui.rs
-expression: terminal.backend()
----
-"╭ CLI-Walker ────────────────────────────────────╮"
-"│      The Rust port is not functional yet.      │"
-"│                Press q to quit.                │"
-"│                                                │"
-"╰────────────────────────────────────────────────╯"
