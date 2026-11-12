@@ -1,0 +1,5 @@
+# Skip crate versions published in the last week when resolving dependencies, so a
+# compromised release has time to be noticed and yanked before it lands here. Versions
+# already in Cargo.lock are kept regardless. Needs Cargo 1.100 or later.
+[registry]
+global-min-publish-age = "7 days"

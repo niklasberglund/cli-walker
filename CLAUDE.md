@@ -63,6 +63,13 @@ builds and then `exec`s the binary rather than running it as a child of Cargo.
 - **HTTP**: reqwest with rustls
 - **Time**: jiff
 
+**Dependencies.** `.cargo/config.toml` sets a 7-day minimum publish age: Cargo skips crate
+versions younger than that when resolving, though versions already in `Cargo.lock` are kept.
+`cargo add` of a fresh release therefore fails; lower the requirement to the version Cargo
+suggests, or override once with `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` if the new
+version is really needed. `[lints.cargo] unused_dependencies = "deny"` fails the build on an
+unused direct dependency (dev-dependencies are not checked).
+
 crossterm is built with `use-dev-tty`. Its default edge-triggered reader drops a key that
 arrives together with a resize until the next key comes in; the poll-based reader does not.
 `redraws_after_a_resize_and_keeps_keys_pressed_with_it` covers this.
