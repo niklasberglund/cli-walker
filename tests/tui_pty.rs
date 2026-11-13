@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
-const UP: &[u8] = b"\x1b[A";
-const DOWN: &[u8] = b"\x1b[B";
+const UP: &[u8] = b"w";
+const DOWN: &[u8] = b"s";
 const CTRL_UP: &[u8] = b"\x1b[1;5A";
 const TAB: &[u8] = b"\t";
 
@@ -192,7 +192,7 @@ fn walks_through_every_tab_and_prints_a_summary_on_quit() {
     s.press(TAB);
     s.wait_for("Demo Walker");
     s.wait_for("1 km");
-    // On this tab, up and down edit the threshold, not the speed.
+    // On this tab, w and s edit the threshold, not the speed.
     s.press(DOWN);
     s.wait_for("900 m");
     s.press(b"m");

@@ -21,17 +21,17 @@ Type "cli-walker" Sleep 400ms Enter
 Sleep 4s
 
 # Speed up
-Up Sleep 1.5s
-Up Sleep 3s
+Type "w" Sleep 1.5s
+Type "w" Sleep 3s
 
 # Statistics
 Tab Sleep 4s
 
 # Strava: lower the upload threshold and mute the feed
 Tab Sleep 1.5s
-Down Sleep 600ms
-Down Sleep 600ms
-Down Sleep 1.2s
+Type "s" Sleep 600ms
+Type "s" Sleep 600ms
+Type "s" Sleep 1.2s
 Type "m" Sleep 2.5s
 
 # Back to the session, then quit

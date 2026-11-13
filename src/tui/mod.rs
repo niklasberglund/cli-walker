@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arrow_keys_drive_the_belt_speed_within_limits() {
+    async fn w_s_keys_drive_the_belt_speed_within_limits() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = DataDir::new(tmp.path());
         let mut app = app(&dir);

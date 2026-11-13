@@ -158,7 +158,7 @@ fn session_tab(view: &View) -> (Line<'static>, Vec<Row>, Line<'static>) {
     (
         heading("CLI-Walker - Kingsmith WalkingPad Monitor"),
         rows,
-        hint("Up/Down +/-0.5  Ctrl+Up/Down +/-0.1  Space pause/resume  Tab/Arrows tabs  q quit"),
+        hint("w/s +/-0.5  Ctrl+Up/Down +/-0.1  Space pause/resume  Tab/Arrows tabs  q quit"),
     )
 }
 
@@ -427,7 +427,7 @@ fn strava_tab(view: &View) -> (Line<'static>, Vec<Row>, Line<'static>) {
     (
         heading("Strava"),
         rows,
-        hint("Up/Down +/-100 m  Ctrl+Up/Down +/-10 m  m mute/unmute  Tab/Arrows tabs  q quit"),
+        hint("w/s +/-100 m  Ctrl+Up/Down +/-10 m  m mute/unmute  Tab/Arrows tabs  q quit"),
     )
 }
 

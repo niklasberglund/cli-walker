@@ -172,7 +172,7 @@ and secret in `~/.cli-walker/strava.json` (mode 0600) along with the tokens.
   account default.
 - A minimum upload distance (`minUploadDistanceKm` in `strava.json`) filters out short
   sessions. It is settable both from the CLI (`strava threshold 500m|1.5km|off`) and from the
-  dashboard's Strava tab (up/down = ±100 m, Ctrl+up/down = ±10 m). `StravaService::pending`
+  dashboard's Strava tab (w/s = ±100 m, Ctrl+up/down = ±10 m). `StravaService::pending`
   and `upload` both honour it, so the pending count matches what a sync would send;
   `strava sync --all` ignores it. A session skipped this way is reported on exit.
 - `strava mute on` sets `hide_from_home` on each upload via a follow-up `PUT`, since the
