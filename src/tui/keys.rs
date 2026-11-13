@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// Up or down; `fine` with Ctrl held.
+    /// Up or down: `w`/`s`, or Ctrl+Up/Down for the fine step.
     Up {
         fine: bool,
     },
@@ -33,8 +33,10 @@ pub fn action(key: &KeyEvent) -> Option<Action> {
         KeyCode::Char('m' | 'M') => Action::ToggleMute,
         KeyCode::Tab | KeyCode::Right => Action::NextTab,
         KeyCode::BackTab | KeyCode::Left => Action::PreviousTab,
-        KeyCode::Up => Action::Up { fine: ctrl },
-        KeyCode::Down => Action::Down { fine: ctrl },
+        KeyCode::Char('w' | 'W') => Action::Up { fine: false },
+        KeyCode::Char('s' | 'S') => Action::Down { fine: false },
+        KeyCode::Up if ctrl => Action::Up { fine: true },
+        KeyCode::Down if ctrl => Action::Down { fine: true },
         _ => return None,
     })
 }
@@ -62,7 +64,16 @@ mod tests {
         assert_eq!(press(KeyCode::Tab, none), Some(Action::NextTab));
         assert_eq!(press(KeyCode::Right, none), Some(Action::NextTab));
         assert_eq!(press(KeyCode::Left, none), Some(Action::PreviousTab));
-        assert_eq!(press(KeyCode::Up, none), Some(Action::Up { fine: false }));
+        assert_eq!(
+            press(KeyCode::Char('w'), none),
+            Some(Action::Up { fine: false })
+        );
+        assert_eq!(
+            press(KeyCode::Char('s'), none),
+            Some(Action::Down { fine: false })
+        );
+        assert_eq!(press(KeyCode::Up, none), None);
+        assert_eq!(press(KeyCode::Down, none), None);
         assert_eq!(
             press(KeyCode::Up, KeyModifiers::CONTROL),
             Some(Action::Up { fine: true })
