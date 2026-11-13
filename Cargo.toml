@@ -1,0 +1,61 @@
+[package]
+name = "cli-walker"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal dashboard and session logger for the Kingsmith WalkingPad A1 Pro"
+license = "MIT"
+repository = "https://github.com/niklasberglund/cli-walker"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+btleplug = "0.13.5"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+crossterm = { version = "0.29.0", features = ["event-stream", "use-dev-tty"] }
+directories = "6.0.0"
+futures = "0.3.34"
+getrandom = "0.3.4"
+jiff = { version = "0.2.39", features = ["serde"] }
+ratatui = "0.30.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "multipart"] }
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+uuid = "1.29.0"
+webbrowser = "1.2.6"
+
+[dev-dependencies]
+insta = "1.49.0"
+portable-pty = "0.9.0"
+quick-xml = "0.42.0"
+tokio = { version = "1.54.1", features = ["test-util"] }
+vt100 = "0.18.1"
+wiremock = "0.6.5"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[package.metadata.dist]
+# `publish = false` keeps this off crates.io; release binaries are still wanted.
+dist = true
+
+[lints.cargo]
+# Fail the build on a dependency nothing uses. Cargo skips crates that are also pulled in
+# by another dependency, and never checks [dev-dependencies].
+unused_dependencies = "deny"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Numeric casts here are deliberate (km/h to protocol tenths, colour maths, display rounding);
+# flagging each one adds noise without catching anything.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"

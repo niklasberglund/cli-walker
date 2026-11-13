@@ -17,12 +17,15 @@ Strava.
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel
-- JDK 17 or newer (for Gradle; the app itself is a native binary)
+- macOS or Linux. Windows builds too, but is untested with the pad.
+- [Rust](https://rustup.rs) (stable) to build it.
+- On Linux: BlueZ, plus `libdbus-1-dev` and `pkg-config` to build
+  (`sudo apt install libdbus-1-dev pkg-config` on Debian and Ubuntu).
 - A WalkingPad A1 Pro. Other WalkingPad models that use the same BLE protocol may work but
   are untested.
 
-On first launch, macOS asks for Bluetooth access for your terminal app. Allow it.
+On first launch, macOS asks for Bluetooth access for your terminal app. Allow it. On Linux,
+no extra permissions are needed for a normal user with BlueZ running.
 
 ## Build and run
 
@@ -30,11 +33,9 @@ On first launch, macOS asks for Bluetooth access for your terminal app. Allow it
 ./run.sh
 ```
 
-This builds the native binary and runs it in the current terminal. The dashboard is an
-interactive TUI, so run it directly rather than through a Gradle task.
-
-The first build downloads the Kotlin/Native toolchain and takes a while. Later builds are
-quicker.
+This builds the binary with Cargo and runs it in the current terminal. The pad is found by
+its Bluetooth service, so its advertised name (the A1 Pro shows up as `KS-ST-A1P`) does not
+matter. The belt starts at the starting speed as soon as the pad connects.
 
 ### Options
 
@@ -102,16 +103,16 @@ Notes:
 ## Development
 
 ```bash
-./gradlew compileKotlinMacosArm64   # compile only
-./gradlew macosArm64Test            # run tests
+cargo build
+cargo test                      # unit, snapshot and pseudo-terminal tests
+cargo clippy --all-targets
+cargo llvm-cov --summary-only   # coverage, with cargo-llvm-cov installed
 ```
-
-On Intel Macs, replace `macosArm64` with `macosX64`.
 
 `cli-walker --demo` runs the dashboard against a simulated pad and sample history in a
 throwaway home directory, so it needs no hardware and leaves your data alone. The README
 GIF is recorded from it with [VHS](https://github.com/charmbracelet/vhs):
-`vhs demo/demo.tape`. See [CLAUDE.md](CLAUDE.md) for an
+`cargo build && vhs demo/demo.tape`. See [CLAUDE.md](CLAUDE.md) for an
 architecture overview and protocol notes.
 
 ## Acknowledgements
@@ -120,9 +121,9 @@ The WalkingPad BLE protocol was worked out by
 [ph4-walkingpad](https://github.com/ph4r05/ph4-walkingpad) and
 [QWalkingPad](https://github.com/DorianRudolph/QWalkingPad).
 
-Built with [Kable](https://github.com/JuulLabs/kable),
-[Mordant](https://github.com/ajalt/mordant), [Clikt](https://github.com/ajalt/clikt) and
-[Ktor](https://ktor.io).
+Built with [btleplug](https://github.com/deviceplug/btleplug),
+[ratatui](https://ratatui.rs), [clap](https://github.com/clap-rs/clap),
+[reqwest](https://github.com/seanmonstar/reqwest) and [tokio](https://tokio.rs).
 
 ## License
 

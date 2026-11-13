@@ -1,7 +1,7 @@
 # Records docs/demo.gif against a simulated pad and sample history.
 # Requires VHS (brew install vhs). Run from the repo root:
 #
-#   ./gradlew macosArm64Binaries && vhs demo/demo.tape
+#   cargo build && vhs demo/demo.tape
 
 Output docs/demo.gif
 
@@ -13,7 +13,7 @@ Set Padding 20
 Set TypingSpeed 60ms
 
 Hide
-Type 'alias cli-walker="./build/bin/macosArm64/debugExecutable/cli-walker.kexe --demo"' Enter
+Type 'alias cli-walker="./target/debug/cli-walker --demo"' Enter
 Type "clear" Enter
 Show
 
