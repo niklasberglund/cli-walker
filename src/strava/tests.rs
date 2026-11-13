@@ -358,12 +358,21 @@ async fn not_connected_without_a_refresh_token() {
     assert!(!service.set_min_upload_distance_km(1.0).unwrap());
 }
 
-/// Plays the browser: follows the authorize URL's redirect to the loopback listener.
-fn browser_redirects_to(port: u16, query: &'static str) {
+/// Plays the browser: follows the authorize URL's redirect to the loopback listener,
+/// passing back the URL's `state` the way Strava does.
+fn browser_redirects_to(authorize_url: &str, port: u16, query: &'static str) {
+    let state = state_in(authorize_url).to_owned();
     tokio::spawn(async move {
-        let url = format!("http://127.0.0.1:{port}/callback?{query}");
+        let url = format!("http://127.0.0.1:{port}/callback?state={state}&{query}");
         let _ = reqwest::get(url).await;
     });
+}
+
+fn state_in(authorize_url: &str) -> &str {
+    authorize_url
+        .split(['?', '&'])
+        .find_map(|pair| pair.strip_prefix("state="))
+        .expect("the authorize URL carries a state")
 }
 
 #[tokio::test]
@@ -402,8 +411,9 @@ async fn logs_in_through_the_loopback_redirect() {
             |url, port| {
                 prompted = url.to_owned();
                 browser_redirects_to(
+                    url,
                     port,
-                    "state=&code=the-code&scope=read,activity:write,activity:read_all",
+                    "code=the-code&scope=read,activity:write,activity:read_all",
                 );
             },
         )
@@ -424,11 +434,47 @@ async fn logs_in_through_the_loopback_redirect() {
         prompted.contains("redirect_uri=http%3A%2F%2Flocalhost%3A"),
         "{prompted}"
     );
+    assert_eq!(state_in(&prompted).len(), 32, "{prompted}");
     let saved = StravaConfigStore::new(&f.dir).load().unwrap();
     assert_eq!(saved.client_id, "new-id");
     assert_eq!(saved.refresh_token.as_deref(), Some("r"));
     assert!(saved.hide_from_feed);
     assert_eq!(saved.min_upload_distance_km, 0.7);
+}
+
+#[tokio::test]
+async fn login_refuses_a_redirect_from_another_login() {
+    let f = Fixture::new().await;
+    let result = f
+        .service()
+        .login(
+            "id",
+            "secret",
+            LoginOptions {
+                port: 0,
+                timeout: Duration::from_secs(5),
+                open_browser: false,
+            },
+            |_, port| {
+                tokio::spawn(async move {
+                    let url = format!(
+                        "http://127.0.0.1:{port}/callback?state=forged&code=c&scope=read,activity:write,activity:read_all"
+                    );
+                    let _ = reqwest::get(url).await;
+                });
+            },
+        )
+        .await;
+    assert!(
+        matches!(&result, LoginResult::Failure(reason) if reason.contains("state")),
+        "{result:?}"
+    );
+    assert!(
+        !StravaConfigStore::new(&f.dir)
+            .load()
+            .unwrap()
+            .is_authorized()
+    );
 }
 
 #[tokio::test]
@@ -444,7 +490,7 @@ async fn login_fails_when_a_scope_was_unticked() {
                 timeout: Duration::from_secs(5),
                 open_browser: false,
             },
-            |_, port| browser_redirects_to(port, "code=c&scope=read,activity:write"),
+            |url, port| browser_redirects_to(url, port, "code=c&scope=read,activity:write"),
         )
         .await;
     assert!(

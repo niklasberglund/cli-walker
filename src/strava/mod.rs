@@ -166,8 +166,14 @@ impl StravaService {
         };
         let port = server.port();
         let redirect_uri = format!("http://localhost:{port}/callback");
+        // Ties the redirect to this login, so a code some other page sends to the port is
+        // never exchanged.
+        let state = match login_state() {
+            Ok(state) => state,
+            Err(e) => return LoginResult::Failure(format!("cannot generate a login state: {e}")),
+        };
         let authorize_url = format!(
-            "{}/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope={}",
+            "{}/authorize?client_id={}&redirect_uri={}&response_type=code&approval_prompt=auto&scope={}&state={state}",
             self.endpoints.oauth,
             encode(client_id),
             encode(&redirect_uri),
@@ -178,7 +184,7 @@ impl StravaService {
             let _ = webbrowser::open(&authorize_url);
         }
 
-        match server.await_redirect(options.timeout).await {
+        match server.await_redirect(options.timeout, &state).await {
             RedirectResult::Code { code, scopes } => {
                 // SCOPE is a comma-joined request; Strava grants each scope individually.
                 let missing: Vec<&str> = SCOPE
@@ -210,6 +216,8 @@ impl StravaService {
 
     /// Uploads one session, skipping sessions already sent.
     pub async fn upload(&mut self, record: &SessionRecord, ignore_threshold: bool) -> UploadResult {
+        // Another process may have uploaded it since this one loaded the log.
+        self.upload_log.reload();
         if self.upload_log.is_uploaded(record) {
             return UploadResult::AlreadyUploaded;
         }
@@ -321,6 +329,13 @@ pub fn parse_threshold(input: &str) -> Option<f64> {
     };
     let value: f64 = number.trim().parse().ok()?;
     (value >= 0.0 && value.is_finite()).then_some(value * factor)
+}
+
+/// An unguessable OAuth `state`: 128 random bits as hex.
+fn login_state() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    Ok(format!("{:032x}", u128::from_le_bytes(bytes)))
 }
 
 #[cfg(test)]

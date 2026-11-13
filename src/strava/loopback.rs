@@ -41,7 +41,8 @@ impl LoopbackServer {
         self.listener.local_addr().map_or(0, |a| a.port())
     }
 
-    pub async fn await_redirect(self, wait: Duration) -> RedirectResult {
+    /// Waits for the redirect, accepting a code only if it carries `state`.
+    pub async fn await_redirect(self, wait: Duration, state: &str) -> RedirectResult {
         let accepted = tokio::time::timeout(wait, self.listener.accept()).await;
         let mut stream = match accepted {
             Err(_) => return RedirectResult::TimedOut,
@@ -56,7 +57,7 @@ impl LoopbackServer {
             _ => return RedirectResult::Failed("empty request".into()),
         };
         let request = String::from_utf8_lossy(&buf[..read]);
-        let result = parse_request(&request);
+        let result = parse_request(&request, state);
 
         let message = match &result {
             RedirectResult::Code { .. } => {
@@ -81,8 +82,10 @@ impl LoopbackServer {
     }
 }
 
-/// Pulls the query parameters out of `GET /callback?code=...&scope=... HTTP/1.1`.
-fn parse_request(request: &str) -> RedirectResult {
+/// Pulls the query parameters out of `GET /callback?state=...&code=...&scope=... HTTP/1.1`.
+/// A code arriving without the `state` this login sent is refused, since it did not come
+/// from this login.
+fn parse_request(request: &str, expected_state: &str) -> RedirectResult {
     let Some(line) = request.lines().next() else {
         return RedirectResult::Failed("no request line".into());
     };
@@ -95,6 +98,7 @@ fn parse_request(request: &str) -> RedirectResult {
     }
 
     let mut code = None;
+    let mut state = None;
     let mut scopes = Vec::new();
     for pair in query.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -102,6 +106,7 @@ fn parse_request(request: &str) -> RedirectResult {
         match key {
             "error" => return RedirectResult::Denied(value),
             "code" => code = Some(value),
+            "state" => state = Some(value),
             "scope" => {
                 scopes = value
                     .split(',')
@@ -113,6 +118,9 @@ fn parse_request(request: &str) -> RedirectResult {
         }
     }
     match code {
+        Some(_) if state.as_deref() != Some(expected_state) => {
+            RedirectResult::Failed("redirect did not come from this login (state mismatch)".into())
+        }
         Some(code) => RedirectResult::Code { code, scopes },
         None => RedirectResult::Failed("redirect carried no code".into()),
     }
@@ -155,9 +163,9 @@ mod tests {
 
     #[test]
     fn parses_an_authorization_redirect() {
-        let request = "GET /callback?state=&code=abc123&scope=read,activity:write,activity:read_all HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request = "GET /callback?state=s1&code=abc123&scope=read,activity:write,activity:read_all HTTP/1.1\r\nHost: localhost\r\n\r\n";
         assert_eq!(
-            parse_request(request),
+            parse_request(request, "s1"),
             RedirectResult::Code {
                 code: "abc123".into(),
                 scopes: vec![
@@ -172,7 +180,10 @@ mod tests {
     #[test]
     fn reports_a_declined_authorization() {
         assert_eq!(
-            parse_request("GET /callback?state=&error=access_denied HTTP/1.1\r\n"),
+            parse_request(
+                "GET /callback?state=s1&error=access_denied HTTP/1.1\r\n",
+                "s1"
+            ),
             RedirectResult::Denied("access_denied".into())
         );
     }
@@ -180,13 +191,27 @@ mod tests {
     #[test]
     fn rejects_requests_without_a_code() {
         assert!(matches!(
-            parse_request("GET /favicon.ico HTTP/1.1\r\n"),
+            parse_request("GET /favicon.ico HTTP/1.1\r\n", "s1"),
             RedirectResult::Failed(_)
         ));
         assert!(matches!(
-            parse_request("GET /callback?scope=read HTTP/1.1\r\n"),
+            parse_request("GET /callback?scope=read HTTP/1.1\r\n", "s1"),
             RedirectResult::Failed(_)
         ));
+    }
+
+    #[test]
+    fn refuses_a_code_without_this_logins_state() {
+        for request in [
+            "GET /callback?code=abc&scope=activity:write HTTP/1.1\r\n",
+            "GET /callback?state=&code=abc&scope=activity:write HTTP/1.1\r\n",
+            "GET /callback?state=other&code=abc&scope=activity:write HTTP/1.1\r\n",
+        ] {
+            assert!(
+                matches!(parse_request(request, "s1"), RedirectResult::Failed(_)),
+                "{request}"
+            );
+        }
     }
 
     #[test]
@@ -202,13 +227,13 @@ mod tests {
     async fn serves_one_redirect_over_tcp() {
         let server = LoopbackServer::bind(0).await.unwrap();
         let port = server.port();
-        let waiting = tokio::spawn(server.await_redirect(Duration::from_secs(5)));
+        let waiting = tokio::spawn(server.await_redirect(Duration::from_secs(5), "s1"));
 
         let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .unwrap();
         stream
-            .write_all(b"GET /callback?code=xyz&scope=activity:write HTTP/1.1\r\n\r\n")
+            .write_all(b"GET /callback?state=s1&code=xyz&scope=activity:write HTTP/1.1\r\n\r\n")
             .await
             .unwrap();
         let mut response = String::new();
@@ -229,7 +254,7 @@ mod tests {
     async fn times_out_without_a_redirect() {
         let server = LoopbackServer::bind(0).await.unwrap();
         assert_eq!(
-            server.await_redirect(Duration::from_millis(20)).await,
+            server.await_redirect(Duration::from_millis(20), "s1").await,
             RedirectResult::TimedOut
         );
     }
