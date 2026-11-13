@@ -42,15 +42,16 @@ pub async fn walk(options: WalkOptions) -> Result<()> {
     let strava = StravaService::new(&data_dir);
     let mut app = App::new(options.start_speed, history, strava, store);
 
+    // Full screen on the alternate screen: it has no scrollback, so a resize cannot pull
+    // earlier shell output into view, and the shell comes back untouched on exit. Set up
+    // before the pad, which starts the belt on connecting: failing here must not leave it
+    // running with nothing to stop it.
+    let mut terminal = ratatui::try_init()?;
     let mut pad = if options.demo {
         pad::demo::spawn(options.start_speed)
     } else {
         pad::ble::spawn(&data_dir, options.debug, options.start_speed)
     };
-
-    // Full screen on the alternate screen: it has no scrollback, so a resize cannot pull
-    // earlier shell output into view, and the shell comes back untouched on exit.
-    let mut terminal = ratatui::try_init()?;
     let outcome = tui::run(&mut terminal, &mut app, &mut pad).await;
     let connection = pad.connection.borrow().clone();
     // Stop a moving belt before the terminal goes back to the shell. The pad drops commands
