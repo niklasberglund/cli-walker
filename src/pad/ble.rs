@@ -9,7 +9,7 @@ use btleplug::api::{
     Central, CentralEvent, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{MissedTickBehavior, interval, sleep, timeout};
@@ -26,6 +26,9 @@ const MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(700);
 /// A stop is written without response, so give the OS time to actually transmit it before
 /// the connection is torn down.
 const STOP_FLUSH_DELAY: Duration = Duration::from_secs(1);
+/// How long quitting waits for a status that shows whether a just-started belt is moving.
+/// Together with the throttling and the stop it must fit inside the app's shutdown timeout.
+const STATUS_WAIT: Duration = Duration::from_millis(1500);
 
 /// Starts the BLE task: scan for the pad, connect, start the belt, then poll its status.
 /// With `debug`, raw packets are logged to `ble.log` in the data directory rather than to
@@ -60,7 +63,7 @@ async fn run(mut pad: PadChannels, mut log: DebugLog, start_speed: f64) {
             return;
         }
     };
-    let notifications = match peripheral.notifications().await {
+    let mut notifications = match peripheral.notifications().await {
         Ok(stream) => stream,
         Err(e) => {
             pad.connection.send_replace(ConnectionState::Error(format!(
@@ -78,10 +81,34 @@ async fn run(mut pad: PadChannels, mut log: DebugLog, start_speed: f64) {
         peripheral,
         write,
         last_command: None,
+        start_unconfirmed: false,
+        queried_since_start: false,
         log,
     };
-    link.start_belt(start_speed).await;
-    link.serve(pad, notifications).await;
+    // Starting takes a couple of seconds of throttled writes. A quit in the meantime must be
+    // handled now, not queued behind them; other commands wait until the belt has started.
+    let mut held = Vec::new();
+    let quit = {
+        let start = link.start_belt(start_speed);
+        tokio::pin!(start);
+        loop {
+            tokio::select! {
+                () = &mut start => break None,
+                command = pad.commands.recv() => match command {
+                    Some(PadCommand::Shutdown(done)) => break Some(Some(done)),
+                    Some(command) => held.push(command),
+                    None => break Some(None),
+                },
+            }
+        }
+    };
+    match quit {
+        Some(Some(done)) => link.shut_down(&pad, &mut notifications, done).await,
+        Some(None) => {
+            let _ = link.peripheral.disconnect().await;
+        }
+        None => link.serve(pad, held, notifications).await,
+    }
     let _ = adapter.stop_scan().await;
 }
 
@@ -191,6 +218,11 @@ struct Link {
     write: Characteristic,
     /// When the last command went out; `None` until the first one has.
     last_command: Option<Instant>,
+    /// A start went out and no status has shown its effect yet. Until one does, the last
+    /// status may say Idle while the belt is in fact starting.
+    start_unconfirmed: bool,
+    /// A status query went out after the latest start, so the next status reflects it.
+    queried_since_start: bool,
     log: DebugLog,
 }
 
@@ -198,8 +230,12 @@ impl Link {
     async fn serve(
         &mut self,
         mut pad: PadChannels,
+        held: Vec<PadCommand>,
         mut notifications: impl Stream<Item = btleplug::api::ValueNotification> + Unpin,
     ) {
+        for command in held {
+            self.drive(command).await;
+        }
         let mut poll = interval(POLL_INTERVAL);
         poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -214,38 +250,18 @@ impl Link {
                         });
                         continue;
                     }
-                    self.send(&protocol::query_status(), false).await;
+                    self.query_status(false).await;
                 }
                 notification = notifications.next() => {
                     let Some(notification) = notification else { continue };
-                    if notification.uuid != protocol::NOTIFY_CHARACTERISTIC_UUID {
-                        continue;
-                    }
-                    self.received(&pad, &notification.value);
+                    self.notified(&pad, &notification);
                 }
                 command = pad.commands.recv() => match command {
-                    Some(PadCommand::StartBelt(speed)) => self.start_belt(speed).await,
-                    Some(PadCommand::StopBelt) => {
-                        self.log.line("CMD: stopBelt");
-                        self.send(&protocol::stop(), true).await;
-                    }
-                    Some(PadCommand::SetSpeed(speed)) => {
-                        self.log.line(&format!("CMD: setSpeed {speed}"));
-                        self.send(&protocol::set_speed(speed), true).await;
-                    }
                     Some(PadCommand::Shutdown(done)) => {
-                        // The pad starts the belt when sent a stop while idle, so only stop
-                        // a belt that is actually moving.
-                        if pad.session.borrow().is_active() {
-                            self.log.line("CMD: stopBelt (quit)");
-                            self.send(&protocol::stop(), true).await;
-                            sleep(STOP_FLUSH_DELAY).await;
-                        }
-                        let _ = self.peripheral.disconnect().await;
-                        pad.connection.send_replace(ConnectionState::Disconnected);
-                        let _ = done.send(());
+                        self.shut_down(&pad, &mut notifications, done).await;
                         return;
                     }
+                    Some(command) => self.drive(command).await,
                     None => {
                         let _ = self.peripheral.disconnect().await;
                         return;
@@ -255,11 +271,97 @@ impl Link {
         }
     }
 
+    /// Belt commands. Shutdown is handled by the caller, which owns the notification stream.
+    async fn drive(&mut self, command: PadCommand) {
+        match command {
+            PadCommand::StartBelt(speed) => self.start_belt(speed).await,
+            PadCommand::StopBelt => {
+                self.log.line("CMD: stopBelt");
+                self.send(&protocol::stop(), true).await;
+            }
+            PadCommand::SetSpeed(speed) => {
+                self.log.line(&format!("CMD: setSpeed {speed}"));
+                self.send(&protocol::set_speed(speed), true).await;
+            }
+            PadCommand::Shutdown(done) => {
+                let _ = done.send(());
+            }
+        }
+    }
+
+    /// Stops the belt if it is moving, then disconnects.
+    async fn shut_down(
+        &mut self,
+        pad: &PadChannels,
+        notifications: &mut (impl Stream<Item = btleplug::api::ValueNotification> + Unpin),
+        done: oneshot::Sender<()>,
+    ) {
+        // The pad starts the belt when sent a stop while idle, so only stop a belt that is
+        // actually moving.
+        if self.belt_moving(pad, notifications).await {
+            self.log.line("CMD: stopBelt (quit)");
+            self.send(&protocol::stop(), true).await;
+            sleep(STOP_FLUSH_DELAY).await;
+        }
+        let _ = self.peripheral.disconnect().await;
+        pad.connection.send_replace(ConnectionState::Disconnected);
+        let _ = done.send(());
+    }
+
+    /// Whether the belt is moving. Right after a start the last status predates it, so this
+    /// asks the pad for a fresh one rather than trusting it.
+    async fn belt_moving(
+        &mut self,
+        pad: &PadChannels,
+        notifications: &mut (impl Stream<Item = btleplug::api::ValueNotification> + Unpin),
+    ) -> bool {
+        // Take in whatever already arrived, so the answer below is the pad's current state.
+        while let Some(Some(notification)) = notifications.next().now_or_never() {
+            self.notified(pad, &notification);
+        }
+        if self.start_unconfirmed {
+            self.query_status(true).await;
+            let _ = timeout(STATUS_WAIT, async {
+                while self.start_unconfirmed {
+                    let Some(notification) = notifications.next().await else {
+                        break;
+                    };
+                    self.notified(pad, &notification);
+                }
+            })
+            .await;
+            if self.start_unconfirmed {
+                // Stopping a belt that never started would start it, so leave it alone.
+                self.log
+                    .line("QUIT: no status since the belt was started; not stopping");
+                return false;
+            }
+        }
+        pad.session.borrow().is_active()
+    }
+
+    async fn query_status(&mut self, throttle: bool) {
+        if self.start_unconfirmed {
+            self.queried_since_start = true;
+        }
+        self.send(&protocol::query_status(), throttle).await;
+    }
+
+    fn notified(&mut self, pad: &PadChannels, notification: &btleplug::api::ValueNotification) {
+        if notification.uuid == protocol::NOTIFY_CHARACTERISTIC_UUID {
+            self.received(pad, &notification.value);
+        }
+    }
+
     fn received(&mut self, pad: &PadChannels, data: &[u8]) {
         match protocol::parse_status(data) {
             Some(session) => {
                 self.log_status(data, &session);
                 pad.session.send_replace(session);
+                if self.queried_since_start {
+                    self.start_unconfirmed = false;
+                    self.queried_since_start = false;
+                }
             }
             None => self.log.line(&format!(
                 "RX: {} | unrecognized response",
@@ -271,6 +373,8 @@ impl Link {
     /// Manual mode, then start, then the speed. The pad needs the pauses between them.
     async fn start_belt(&mut self, speed: f64) {
         self.log.line(&format!("CMD: startBelt speed={speed}"));
+        self.start_unconfirmed = true;
+        self.queried_since_start = false;
         self.send(&protocol::set_mode_manual(), true).await;
         sleep(Duration::from_millis(300)).await;
         self.send(&protocol::start(), true).await;
