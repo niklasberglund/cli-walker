@@ -73,10 +73,7 @@ impl WalkingSession {
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
-            BeltState::Running
-                | BeltState::Starting
-                | BeltState::Accelerating
-                | BeltState::Ramping
+            BeltState::Running | BeltState::Starting | BeltState::Accelerating | BeltState::Ramping
         )
     }
 
