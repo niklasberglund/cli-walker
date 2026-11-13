@@ -11,7 +11,7 @@ use anyhow::Result;
 use jiff::Timestamp;
 
 use crate::model::{SessionRecord, instant};
-use crate::store::DataDir;
+use crate::store::{DataDir, write_atomic};
 
 /// Marks a session that reached Strava but whose activity id was never learned. Logging it
 /// still matters: it is what stops the session being uploaded a second time.
@@ -30,20 +30,28 @@ pub struct UploadLog {
 
 impl UploadLog {
     pub fn load(dir: &DataDir) -> Self {
-        let path = dir.file("strava-uploads.json");
-        let entries: BTreeMap<String, i64> = fs::read_to_string(&path)
+        let mut log = Self {
+            dir: dir.clone(),
+            path: dir.file("strava-uploads.json"),
+            entries: BTreeMap::new(),
+            by_instant: BTreeMap::new(),
+        };
+        log.reload();
+        log
+    }
+
+    /// Picks up what another process (a `strava sync` while the dashboard is open, say) has
+    /// recorded since this log was loaded.
+    pub fn reload(&mut self) {
+        let on_disk: BTreeMap<String, i64> = fs::read_to_string(&self.path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        let by_instant = entries
-            .iter()
-            .filter_map(|(key, id)| Some((key.parse().ok()?, *id)))
-            .collect();
-        Self {
-            dir: dir.clone(),
-            path,
-            entries,
-            by_instant,
+        for (key, id) in on_disk {
+            if let Ok(instant) = key.parse() {
+                self.by_instant.insert(instant, id);
+            }
+            self.entries.insert(key, id);
         }
     }
 
@@ -63,11 +71,16 @@ impl UploadLog {
     }
 
     pub fn record(&mut self, record: &SessionRecord, activity_id: Option<i64>) -> Result<()> {
+        // Rewriting from what this process loaded would drop entries written since.
+        self.reload();
         let id = activity_id.unwrap_or(UNKNOWN_ACTIVITY_ID);
         self.entries.insert(instant::format(record.started_at), id);
         self.by_instant.insert(record.started_at, id);
         self.dir.ensure()?;
-        fs::write(&self.path, serde_json::to_string_pretty(&self.entries)?)?;
+        write_atomic(
+            &self.path,
+            serde_json::to_string_pretty(&self.entries)?.as_bytes(),
+        )?;
         Ok(())
     }
 }
@@ -113,6 +126,29 @@ mod tests {
         assert_eq!(log.activity_id_for(&unknown_id), None);
 
         assert!(!log.is_uploaded(&record("2026-10-23T07:00:00Z")));
+    }
+
+    #[test]
+    fn keeps_uploads_another_process_recorded_meanwhile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = DataDir::new(tmp.path());
+        let mut dashboard = UploadLog::load(&dir);
+        let mut sync = UploadLog::load(&dir);
+
+        let synced = record("2026-11-01T10:00:00Z");
+        sync.record(&synced, Some(1)).unwrap();
+        dashboard.reload();
+        assert!(dashboard.is_uploaded(&synced));
+
+        let walked = record("2026-11-02T10:00:00Z");
+        UploadLog::load(&dir)
+            .record(&record("2026-11-03T10:00:00Z"), Some(3))
+            .unwrap();
+        dashboard.record(&walked, Some(2)).unwrap();
+        let on_disk = UploadLog::load(&dir);
+        assert!(on_disk.is_uploaded(&synced));
+        assert!(on_disk.is_uploaded(&walked));
+        assert!(on_disk.is_uploaded(&record("2026-11-03T10:00:00Z")));
     }
 
     #[test]

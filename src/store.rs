@@ -52,21 +52,46 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
 }
 
 /// Writes `contents` to a file only its owner can read. The file is created with mode 0600
-/// up front, so secrets never exist on disk under the default umask, even briefly; an
-/// existing file is tightened too, because the mode only applies on creation.
+/// up front, so secrets never exist on disk under the default umask, even briefly.
 pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_replacing(path, contents, true)
+}
+
+/// Replaces a file's contents. The new contents go to a temporary file beside it that then
+/// takes its place, so a write that fails or is cut short leaves the old file intact rather
+/// than empty or half-written.
+pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_replacing(path, contents, false)
+}
+
+fn write_replacing(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(".{}.tmp", std::process::id()));
+    let temp = path.with_file_name(temp_name);
+
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    if private {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     }
-    file.write_all(contents)?;
-    file.flush()
+    #[cfg(not(unix))]
+    let _ = private;
+    let written = options.open(&temp).and_then(|mut file| {
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    match written.and_then(|()| fs::rename(&temp, path)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&temp);
+            Err(e)
+        }
+    }
 }
 
 /// `sessions.jsonl`: one JSON record per line, only ever appended to.
@@ -165,5 +190,36 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "new");
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn replacing_a_file_leaves_no_temporary_file_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("log.json");
+        fs::write(&path, "old").unwrap();
+
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let names: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["log.json"]);
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_old_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("log.json");
+        fs::write(&path, "old").unwrap();
+        // A directory where the temporary file would go makes the write fail.
+        fs::create_dir(
+            tmp.path()
+                .join(format!(".log.json.{}.tmp", std::process::id())),
+        )
+        .unwrap();
+
+        assert!(write_atomic(&path, b"new").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 }
