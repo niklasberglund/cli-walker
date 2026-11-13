@@ -133,9 +133,18 @@ mod tests {
     #[test]
     fn keeps_unknown_belt_states() {
         let mut packet = [0u8; 16];
-        packet[..3].copy_from_slice(&[0xF8, 0xA2, 0x07]);
+        packet[..3].copy_from_slice(&[0xF8, 0xA2, 0x0B]);
         let s = parse_status(&packet).unwrap();
         assert_eq!(s.state, BeltState::Unknown);
+        assert_eq!(s.raw_state, 0x0B);
+    }
+
+    #[test]
+    fn parses_ramping_belt_state() {
+        let mut packet = [0u8; 16];
+        packet[..3].copy_from_slice(&[0xF8, 0xA2, 0x07]);
+        let s = parse_status(&packet).unwrap();
+        assert_eq!(s.state, BeltState::Ramping);
         assert_eq!(s.raw_state, 7);
     }
 

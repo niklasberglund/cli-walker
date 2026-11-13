@@ -183,6 +183,7 @@ fn belt_line(s: &WalkingSession) -> Line<'static> {
     match s.state {
         BeltState::Running => Line::from("Running").green(),
         BeltState::Starting | BeltState::Accelerating => Line::from("Starting...").yellow(),
+        BeltState::Ramping => Line::from("Ramping").yellow(),
         BeltState::Standby => Line::from("Standby").yellow(),
         BeltState::Idle => Line::from("Idle").fg(GRAY),
         BeltState::Unknown => Line::from(format!("Unknown(0x{:02x})", s.raw_state)).magenta(),

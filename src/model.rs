@@ -17,6 +17,8 @@ pub enum BeltState {
     Starting,
     Standby,
     Accelerating,
+    /// Seen for about a second right after the start command, before the belt moves.
+    Ramping,
     /// A state byte the protocol docs do not describe; `WalkingSession::raw_state` keeps it.
     Unknown,
 }
@@ -28,6 +30,7 @@ impl BeltState {
             1 => Self::Running,
             4 => Self::Starting,
             5 => Self::Standby,
+            7 => Self::Ramping,
             9 => Self::Accelerating,
             _ => Self::Unknown,
         }
@@ -70,7 +73,7 @@ impl WalkingSession {
     pub fn is_active(&self) -> bool {
         matches!(
             self.state,
-            BeltState::Running | BeltState::Starting | BeltState::Accelerating
+            BeltState::Running | BeltState::Starting | BeltState::Accelerating | BeltState::Ramping
         )
     }
 
