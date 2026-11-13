@@ -140,10 +140,13 @@ fn hint(text: &str) -> Line<'static> {
 
 fn session_tab(view: &View) -> (Line<'static>, Vec<Row>, Line<'static>) {
     let s = view.session;
+    // The last sample outlives the link, so belt and speed would go on reporting a pad that
+    // may have stopped. Distance, steps and time still describe the walk and stay.
+    let live = *view.connection == ConnectionState::Connected;
     let rows = vec![
         pair("Status", connection_line(view.connection)),
-        pair("Belt", belt_line(s)),
-        pair("Speed", speed_line(s)),
+        pair("Belt", if live { belt_line(s) } else { unknown() }),
+        pair("Speed", if live { speed_line(s) } else { unknown() }),
         pair("Distance", Line::from(s.formatted_distance()).green()),
         pair("Steps", Line::from(s.steps.to_string()).magenta()),
         pair("Time", time_line(s)),
@@ -170,6 +173,10 @@ fn connection_line(state: &ConnectionState) -> Line<'static> {
             Span::styled(format!("  {message}"), Style::new().fg(GRAY)),
         ]),
     }
+}
+
+fn unknown() -> Line<'static> {
+    Line::from("—").fg(GRAY)
 }
 
 fn belt_line(s: &WalkingSession) -> Line<'static> {
@@ -586,6 +593,13 @@ mod tests {
     #[test]
     fn session_tab() {
         let (s, c, st) = (walking(), ConnectionState::Connected, strava());
+        let terminal = draw(&view(Tab::Session, &s, &c, &st, &[]), 90, 32);
+        assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn session_tab_hides_belt_and_speed_when_disconnected() {
+        let (s, c, st) = (walking(), ConnectionState::Disconnected, strava());
         let terminal = draw(&view(Tab::Session, &s, &c, &st, &[]), 90, 32);
         assert_snapshot!(terminal.backend());
     }
