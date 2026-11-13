@@ -54,7 +54,7 @@ matter. The belt starts at the starting speed as soon as the pad connects.
 | Space                 | Stop / start the belt                          |
 | Tab, Left / Right     | Switch tabs (Session, Statistics, Strava)      |
 | `m` (Strava tab)      | Toggle feed muting                             |
-| `w` / `s` (Strava tab)| Minimum upload distance ±100 m (Ctrl: ±10 m)   |
+| `w` / `s` (Strava tab)| Minimum upload distance ±100 m (Ctrl+Up/Down: ±10 m) |
 | `q`, Ctrl+C           | Quit (stops the belt if it is moving)          |
 
 ## Sessions
